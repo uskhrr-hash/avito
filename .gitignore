@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.browser_profile/
+logs/*.log
+_probe*
+
+# выходные данные (генерируются скриптами)
+output/*
+!output/.gitkeep
+
+# временные файлы Excel
+~$*

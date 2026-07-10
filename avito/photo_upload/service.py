@@ -106,6 +106,39 @@ def _latest_no_photos_csv(runtime: PhotoUploadRuntime) -> Path | None:
     return files[0] if files else None
 
 
+@dataclass(frozen=True)
+class NoPhotosQueueResult:
+    items: list[NoPhotoItem]
+    source_file: str | None
+    hint: str
+
+
+def load_no_photos_queue_info(
+    runtime: PhotoUploadRuntime,
+    *,
+    store_prefix: str,
+    limit: int = 80,
+) -> NoPhotosQueueResult:
+    path = _latest_no_photos_csv(runtime)
+    prefix = store_prefix.strip()
+    if path is None:
+        return NoPhotosQueueResult(
+            [],
+            None,
+            "Список ещё не собран. На сервере запустите: build_stock → compare_prices → build_autoload",
+        )
+    items = load_no_photos_queue(
+        runtime, store_prefix=store_prefix, limit=limit
+    )
+    if not items:
+        return NoPhotosQueueResult(
+            [],
+            path.name,
+            f"Для магазина {prefix} в {path.name} нет позиций (или всё уже снято)",
+        )
+    return NoPhotosQueueResult(items, path.name, "")
+
+
 def load_no_photos_queue(
     runtime: PhotoUploadRuntime,
     *,

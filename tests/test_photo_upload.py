@@ -7,7 +7,6 @@ from PIL import Image
 
 from avito.manager_inbox import photo_relative_path, photo_target_path
 from avito.photo_upload.service import (
-    load_no_photos_queue,
     next_photo_index,
     pending_photo_meta,
     save_uploaded_photo,
@@ -127,9 +126,11 @@ photo_upload:
     def test_no_photos_queue_filters_store(self):
         with tempfile.TemporaryDirectory() as tmp_name:
             runtime = self._runtime(Path(tmp_name))
-            rows = load_no_photos_queue(runtime, store_prefix="md")
-            self.assertEqual(len(rows), 1)
-            self.assertEqual(rows[0].article, "124889")
+            from avito.photo_upload.service import load_no_photos_queue_info
+
+            result = load_no_photos_queue_info(runtime, store_prefix="md")
+            self.assertEqual(len(result.items), 1)
+            self.assertEqual(result.items[0].article, "124889")
 
     def test_next_photo_index(self):
         with tempfile.TemporaryDirectory() as tmp_name:

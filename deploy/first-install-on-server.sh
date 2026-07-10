@@ -23,6 +23,7 @@ cd "$APP_DIR"
 
 echo "=== Папки ==="
 mkdir -p "$PHOTOS_DIR" "$FEED_DIR" output logs input
+chmod 755 "$PHOTOS_DIR"
 
 echo "=== config.local.yaml ==="
 if [ ! -f config.local.yaml ]; then

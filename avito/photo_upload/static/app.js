@@ -9,6 +9,9 @@
   const queueList = document.getElementById("queue-list");
   const refreshQueueBtn = document.getElementById("refresh-queue");
   const toast = document.getElementById("toast");
+  const loadingEl = document.getElementById("loading");
+  const loadingText = document.getElementById("loading-text");
+  const UPLOAD_LABEL = "Отправить на сервер";
 
   /** @type {{id:string,index:number,filename:string,relativePath:string,blob:Blob,url:string}[]} */
   let pending = [];
@@ -18,7 +21,17 @@
   function showToast(message) {
     toast.textContent = message;
     toast.classList.add("show");
-    window.setTimeout(() => toast.classList.remove("show"), 2200);
+    window.setTimeout(() => toast.classList.remove("show"), 2800);
+  }
+
+  function setLoading(active, text) {
+    if (!loadingEl) return;
+    loadingEl.classList.toggle("hidden", !active);
+    loadingEl.setAttribute("aria-busy", active ? "true" : "false");
+    document.body.classList.toggle("is-loading", active);
+    if (loadingText && text) {
+      loadingText.textContent = text;
+    }
   }
 
   function currentArticle() {
@@ -29,6 +42,7 @@
     pendingList.innerHTML = "";
     pendingCount.textContent = String(pending.length);
     uploadBtn.disabled = pending.length === 0 || !currentArticle();
+    uploadBtn.textContent = UPLOAD_LABEL;
 
     for (const item of pending) {
       const card = document.createElement("div");
@@ -129,6 +143,8 @@
       return;
     }
 
+    setLoading(true, "Подготовка снимка…");
+
     const used = new Set(pending.map((item) => item.index));
     let meta;
     try {
@@ -139,6 +155,7 @@
         meta.relative_path = `${window.PHOTO_UPLOAD_SESSION.prefix}/${meta.filename}`;
       }
     } catch (error) {
+      setLoading(false);
       showToast(String(error.message || error));
       return;
     }
@@ -153,6 +170,7 @@
       blob: file,
       url,
     });
+    setLoading(false);
     renderPending();
     showToast(`Добавлено: ${meta.relative_path}`);
   });
@@ -161,7 +179,11 @@
     const article = currentArticle();
     if (!article || pending.length === 0) return;
 
+    const count = pending.length;
     uploadBtn.disabled = true;
+    uploadBtn.textContent = `Загрузка ${count} фото…`;
+    setLoading(true, `Отправка ${count} фото на сервер…`);
+
     const formData = new FormData();
     formData.append("article", article);
     formData.append("indices", pending.map((item) => item.index).join(","));
@@ -174,7 +196,12 @@
         method: "POST",
         body: formData,
       });
-      const data = await response.json();
+      let data = {};
+      try {
+        data = await response.json();
+      } catch (_err) {
+        data = {};
+      }
       if (!response.ok) {
         throw new Error(data.detail || "Ошибка загрузки");
       }
@@ -183,11 +210,16 @@
       }
       pending = [];
       renderPending();
-      showToast(`Сохранено: ${data.saved.length} фото`);
+      uploadBtn.classList.add("upload-success");
+      window.setTimeout(() => uploadBtn.classList.remove("upload-success"), 400);
+      showToast(`✓ Сохранено: ${data.saved?.length || count} фото`);
       await loadQueue();
     } catch (error) {
       showToast(String(error.message || error));
       uploadBtn.disabled = false;
+      uploadBtn.textContent = UPLOAD_LABEL;
+    } finally {
+      setLoading(false);
     }
   });
 
@@ -200,18 +232,30 @@
   });
 
   async function loadQueue() {
-    queueList.innerHTML = "<p class='muted'>Загрузка…</p>";
+    queueList.innerHTML = "<p class='muted'>Загрузка списка…</p>";
     const response = await fetch("api/no-photos?limit=80");
     if (!response.ok) {
       queueList.innerHTML = "<p class='muted'>Не удалось загрузить список</p>";
       return;
     }
-    const rows = await response.json();
+    const payload = await response.json();
+    const rows = Array.isArray(payload) ? payload : payload.items || [];
+    const hint = payload.hint || "";
+
     if (!rows.length) {
-      queueList.innerHTML = "<p class='muted'>Список пуст или файл ещё не собран</p>";
+      queueList.innerHTML = `<p class='muted'>${hint || "Список пуст"}</p>`;
       return;
     }
+
     queueList.innerHTML = "";
+    if (payload.source_file) {
+      const meta = document.createElement("p");
+      meta.className = "muted";
+      meta.style.margin = "0 0 8px";
+      meta.textContent = `${rows.length} позиций · ${payload.source_file}`;
+      queueList.appendChild(meta);
+    }
+
     for (const row of rows) {
       const button = document.createElement("button");
       button.type = "button";

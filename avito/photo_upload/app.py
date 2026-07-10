@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from avito.photo_upload.service import (
-    load_no_photos_queue,
+    load_no_photos_queue_info,
     lookup_stock,
     next_photo_index,
     pending_photo_meta,
@@ -134,19 +134,24 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
     @app.get("/api/no-photos")
     async def api_no_photos(request: Request, limit: int = 80) -> JSONResponse:
         store = _require_store(request, runtime)
-        rows = load_no_photos_queue(
+        result = load_no_photos_queue_info(
             runtime, store_prefix=store.prefix, limit=min(limit, 200)
         )
         return JSONResponse(
-            [
-                {
-                    "article": r.article,
-                    "nomenclature": r.nomenclature,
-                    "stores": r.stores,
-                    "problem": r.problem,
-                }
-                for r in rows
-            ]
+            {
+                "items": [
+                    {
+                        "article": r.article,
+                        "nomenclature": r.nomenclature,
+                        "stores": r.stores,
+                        "problem": r.problem,
+                    }
+                    for r in result.items
+                ],
+                "source_file": result.source_file,
+                "hint": result.hint,
+                "count": len(result.items),
+            }
         )
 
     @app.get("/api/next-index")
@@ -321,6 +326,13 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
 
   <div class="bottom-bar">
     <button type="button" id="upload" class="btn btn-primary" disabled>Отправить на сервер</button>
+  </div>
+
+  <div id="loading" class="loading hidden" aria-live="polite" aria-busy="false">
+    <div class="loading-box">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="loading-text">Загрузка на сервер…</p>
+    </div>
   </div>
 
   <div id="toast" class="toast"></div>

@@ -8,6 +8,8 @@ import pandas as pd
 from avito.autoload import (
     _apply_descriptions_to_sheet,
     _apply_listing_ids_to_sheet,
+    _apply_quantities_to_sheet,
+    _quantity_label,
     _remove_rows_without_photos,
     _sync_avito_ids_to_sheet,
     _sync_photo_urls_to_sheet,
@@ -531,6 +533,38 @@ class TestAutoload(unittest.TestCase):
         )
         self.assertEqual(n, 1)
         self.assertIn("Шины в наличии!", str(ws.cell(5, 4).value))
+
+    def test_quantity_label_caps_at_max(self):
+        self.assertEqual(_quantity_label("20", max_quantity=12), "12")
+        self.assertEqual(_quantity_label("4", max_quantity=12), "4")
+        self.assertEqual(_quantity_label("", max_quantity=12), "1")
+
+    def test_apply_quantities_updates_sheet(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.cell(2, 1, "Название объявления")
+        ws.cell(2, 2, "Количество")
+        ws.cell(5, 1, "Kumho Ecowing ES31 195/65 R15 91H")
+        ws.cell(5, 2, "4")
+        posting = pd.DataFrame(
+            [
+                {
+                    "номенклатура": "Kumho Ecowing ES31 195/65 R15 91H",
+                    "артикул": "12044",
+                    "recommended_price": 4110,
+                    "количество": 20,
+                }
+            ]
+        )
+        n = _apply_quantities_to_sheet(
+            ws,
+            qty_col=2,
+            title_col=1,
+            posting_df=posting,
+            max_quantity=12,
+        )
+        self.assertEqual(n, 1)
+        self.assertEqual(str(ws.cell(5, 2).value), "12")
 
     def test_save_workbook_fallback_when_locked(self):
         with tempfile.TemporaryDirectory() as tmp:

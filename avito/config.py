@@ -82,6 +82,7 @@ class AutoloadSettings:
     include_all_goods_in_autoload: bool
     no_photos_file: str
     avito_ids_file: Path
+    max_listing_quantity: int = 12
 
 
 @dataclass
@@ -374,6 +375,7 @@ def _load_autoload(raw: dict) -> AutoloadSettings:
         ),
         no_photos_file=str(raw.get("no_photos_file", "no_photos.xlsx")),
         avito_ids_file=Path(raw.get("avito_ids_file", "input/avito_ids.csv")),
+        max_listing_quantity=max(1, int(raw.get("max_listing_quantity", 12))),
     )
 
 

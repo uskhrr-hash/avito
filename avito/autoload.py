@@ -219,6 +219,38 @@ def _apply_prices_to_sheet(
     return changed
 
 
+def _apply_quantities_to_sheet(
+    ws,
+    *,
+    qty_col: int | None,
+    title_col: int | None,
+    posting_df: pd.DataFrame,
+    max_quantity: int,
+) -> int:
+    """Колонка «Количество» на всех строках: остаток из posting, иначе 1."""
+    if not qty_col:
+        return 0
+
+    post_by_nom = _posting_row_lookup(
+        posting_df,
+        max_quantity=max_quantity,
+    )
+    changed = 0
+    for row_idx in range(DATA_START_ROW, ws.max_row + 1):
+        if not title_col:
+            break
+        title = str(ws.cell(row_idx, title_col).value or "").strip()
+        if not title:
+            continue
+        post = post_by_nom.get(title)
+        new_qty = post["quantity"] if post else "1"
+        current = str(ws.cell(row_idx, qty_col).value or "").strip()
+        if current != new_qty:
+            ws.cell(row_idx, qty_col, new_qty)
+            changed += 1
+    return changed
+
+
 def _apply_descriptions_to_sheet(
     ws,
     *,
@@ -236,7 +268,10 @@ def _apply_descriptions_to_sheet(
     if not desc_col or not title_col:
         return 0
 
-    post_by_nom = _posting_row_lookup(posting_df)
+    post_by_nom = _posting_row_lookup(
+        posting_df,
+        max_quantity=cfg.max_listing_quantity,
+    )
     changed = 0
 
     for row_idx in range(DATA_START_ROW, ws.max_row + 1):
@@ -270,7 +305,10 @@ def _apply_descriptions_to_sheet(
         if post.get("quantity"):
             qty = post["quantity"]
         elif qty_col:
-            qty = _quantity_label(str(ws.cell(row_idx, qty_col).value or ""))
+            qty = _quantity_label(
+                str(ws.cell(row_idx, qty_col).value or ""),
+                max_quantity=cfg.max_listing_quantity,
+            )
         else:
             qty = "1"
 
@@ -565,7 +603,11 @@ def _store_defaults_for_listing_id(
     return dict(cfg_defaults)
 
 
-def _posting_row_lookup(posting_df: pd.DataFrame) -> dict[str, dict]:
+def _posting_row_lookup(
+    posting_df: pd.DataFrame,
+    *,
+    max_quantity: int = 12,
+) -> dict[str, dict]:
     out: dict[str, dict] = {}
     for _, row in posting_df.iterrows():
         nom = str(row.get("номенклатура", "") or "").strip()
@@ -577,7 +619,10 @@ def _posting_row_lookup(posting_df: pd.DataFrame) -> dict[str, dict]:
         out[nom] = {
             "article": normalize_article_id(row.get("артикул", "")),
             "price": _autoload_price(rec),
-            "quantity": _quantity_label(str(row.get("количество", ""))),
+            "quantity": _quantity_label(
+                str(row.get("количество", "")),
+                max_quantity=max_quantity,
+            ),
         }
     return out
 
@@ -612,13 +657,17 @@ def _format_description(
     return desc[:MAX_AVITO_DESCRIPTION_LEN]
 
 
-def _quantity_label(qty: str) -> str:
+def _quantity_label(qty: str, *, max_quantity: int = 12) -> str:
+    """Остаток для колонки «Количество» (цена в файле — всегда за 1 шт)."""
     q = str(qty).strip()
     if not q or q.lower() == "nan":
         return "1"
     try:
         n = int(float(q))
-        return str(n) if n > 0 else "1"
+        if n <= 0:
+            return "1"
+        cap = max(1, int(max_quantity))
+        return str(min(n, cap))
     except ValueError:
         return "1"
 
@@ -1304,7 +1353,10 @@ def fill_autoload_template(
                 "model": fields.get("model", ""),
                 "пример_номенклатуры": nom,
             }
-        qty = _quantity_label(str(post.get("количество", "")))
+        qty = _quantity_label(
+            str(post.get("количество", "")),
+            max_quantity=cfg.max_listing_quantity,
+        )
         photo_cfg = _photo_cfg(cfg)
 
         for sp in store_photo_sets:
@@ -1409,6 +1461,20 @@ def fill_autoload_template(
     )
     if rounded:
         LOG.info("Цены в файле: обновлено/округлено %s строк", rounded)
+
+    qty_updated = _apply_quantities_to_sheet(
+        ws,
+        qty_col=c_qty,
+        title_col=c_title,
+        posting_df=posting_df,
+        max_quantity=cfg.max_listing_quantity,
+    )
+    if qty_updated:
+        LOG.info(
+            "Количество в файле: обновлено %s строк (макс. %s шт, цена за 1 шт)",
+            qty_updated,
+            cfg.max_listing_quantity,
+        )
 
     photo_set, photo_cleared = _sync_photo_urls_to_sheet(
         ws,

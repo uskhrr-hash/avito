@@ -126,6 +126,8 @@ autoload:
   skip_without_photos: true
   include_all_goods_in_autoload: false
   avito_ids_file: input/avito_ids.csv
+  # В колонке «Количество» — остаток на складе, не больше этого числа (цена всегда за 1 шт)
+  max_listing_quantity: 12
   description_html: |
     <p><strong>Шины в наличии!</strong></p>
     <p>Новые шины &quot;{nomenclature}&quot;🛞🛞🛞</p>

@@ -141,17 +141,23 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return out
 
 
-def load_settings(path: Path) -> ScrapeSettings:
-    return load_config(path).scrape
-
-
-def load_config(path: Path) -> AppConfig:
+def load_merged_yaml(path: Path) -> dict:
+    """config.yaml + config.local.yaml (если есть)."""
     raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     local_path = path.parent / "config.local.yaml"
     if local_path.is_file():
         local_raw = yaml.safe_load(local_path.read_text(encoding="utf-8")) or {}
         if local_raw:
             raw = _deep_merge(raw, local_raw)
+    return raw
+
+
+def load_settings(path: Path) -> ScrapeSettings:
+    return load_config(path).scrape
+
+
+def load_config(path: Path) -> AppConfig:
+    raw = load_merged_yaml(path)
     root = path.parent
     stores_path = root / str(raw.get("stores_file", "stores.yaml"))
     compare_raw = raw.get("compare") or {}

@@ -13,8 +13,6 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import yaml
-
 from avito.avito_api import (
     AvitoApiClient,
     get_autoload_profile,
@@ -23,7 +21,7 @@ from avito.avito_api import (
     trigger_autoload_upload,
     update_autoload_profile,
 )
-from avito.config import load_config
+from avito.config import load_config, load_merged_yaml
 from avito.db import load_secrets
 
 LOG = logging.getLogger("publish_avito_feed")
@@ -45,7 +43,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _load_publish_cfg(config_path: Path) -> dict:
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    raw = load_merged_yaml(config_path)
     return dict(raw.get("avito_publish") or {})
 
 
@@ -55,7 +53,9 @@ def main() -> int:
 
     pub = _load_publish_cfg(args.config)
     if not pub.get("enabled", False) and not args.dry_run:
-        LOG.error("avito_publish.enabled=false в config.yaml")
+        LOG.error(
+            "avito_publish.enabled=false (проверьте config.yaml и config.local.yaml)"
+        )
         return 1
 
     feed_url = str(pub.get("feed_public_url", "")).strip()

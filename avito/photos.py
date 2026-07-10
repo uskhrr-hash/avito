@@ -411,20 +411,61 @@ def resolve_listing_photo_sets(
     )
 
 
+def photo_relative_path(
+    path: Path,
+    photos_root: Path | None,
+    *,
+    article: str,
+    layout: str,
+    store_prefix: str | None = None,
+    use_disk_basename: bool = False,
+) -> str:
+    """
+    Относительный путь файла для URL/nginx или yandex_disk://.
+
+  Если задан photos_root — фактический путь от корня папки фото
+  (модель в корне → без md/; артикул в md/ → md/124889.jpg).
+    """
+    if photos_root is not None:
+        try:
+            rel = path.resolve().relative_to(photos_root.resolve())
+            if use_disk_basename:
+                parent = rel.parent
+                name = autoload_disk_basename(path)
+                return (
+                    f"{parent.as_posix()}/{name}"
+                    if parent.parts
+                    else name
+                )
+            return rel.as_posix()
+        except ValueError:
+            pass
+
+    layout = (layout or "flat").lower()
+    name = autoload_disk_basename(path) if use_disk_basename else path.name
+    if layout == "folder":
+        return f"{article.strip()}/{name}"
+    if layout == "store_subdir" and store_prefix:
+        return f"{store_prefix.strip()}/{name}"
+    return name
+
+
 def disk_path_to_yandex_name(
     path: Path,
     article: str,
     layout: str,
     *,
     store_prefix: str | None = None,
+    photos_root: Path | None = None,
 ) -> str:
-    layout = (layout or "flat").lower()
-    name = autoload_disk_basename(path)
-    if layout == "folder":
-        return f"{article.strip()}/{name}"
-    if layout == "store_subdir" and store_prefix:
-        return f"{store_prefix.strip()}/{name}"
-    return name
+    return photo_relative_path(
+        path,
+        photos_root,
+        article=article,
+        layout=layout,
+        store_prefix=store_prefix,
+        use_disk_basename=True,
+    )
 
 
 def is_avito_hosted_photo_url(url: str) -> bool:
@@ -449,30 +490,14 @@ def yandex_disk_urls_from_files(
     article: str,
     layout: str,
     store_prefix: str | None = None,
+    photos_root: Path | None = None,
 ) -> str:
     root = yandex_disk_root.strip("/").strip("\\")
     parts = [
-        f"yandex_disk://{root}/{disk_path_to_yandex_name(f, article, layout, store_prefix=store_prefix)}"
+        f"yandex_disk://{root}/{disk_path_to_yandex_name(f, article, layout, store_prefix=store_prefix, photos_root=photos_root)}"
         for f in files
     ]
     return " | ".join(parts)
-
-
-def _yandex_https_relative_name(
-    path: Path,
-    article: str,
-    layout: str,
-    *,
-    store_prefix: str | None = None,
-) -> str:
-    """Для API — фактическое имя файла (с учётом .JPG), не «идеальный» .jpg из HEIC."""
-    layout = (layout or "flat").lower()
-    name = path.name
-    if layout == "folder":
-        return f"{article.strip()}/{name}"
-    if layout == "store_subdir" and store_prefix:
-        return f"{store_prefix.strip()}/{name}"
-    return name
 
 
 def yandex_https_urls_from_files(
@@ -482,12 +507,17 @@ def yandex_https_urls_from_files(
     article: str,
     layout: str,
     store_prefix: str | None = None,
+    photos_root: Path | None = None,
     downloader: YandexDiskDownloadUrls,
 ) -> str:
     parts: list[str] = []
     for f in files:
-        rel = _yandex_https_relative_name(
-            f, article, layout, store_prefix=store_prefix
+        rel = photo_relative_path(
+            f,
+            photos_root,
+            article=article,
+            layout=layout,
+            store_prefix=store_prefix,
         )
         disk_path = disk_resource_path(yandex_disk_root, rel)
         href = downloader.href_for_disk_file(disk_path, local_path=f)
@@ -503,12 +533,17 @@ def server_https_urls_from_files(
     article: str,
     layout: str,
     store_prefix: str | None = None,
+    photos_root: Path | None = None,
 ) -> str:
     base = photos_public_base_url.rstrip("/") + "/"
     parts: list[str] = []
     for f in files:
-        rel = _yandex_https_relative_name(
-            f, article, layout, store_prefix=store_prefix
+        rel = photo_relative_path(
+            f,
+            photos_root,
+            article=article,
+            layout=layout,
+            store_prefix=store_prefix,
         )
         parts.append(base + quote(rel, safe="/"))
     return " | ".join(parts)
@@ -521,6 +556,7 @@ def build_store_photo_urls(
     article: str,
     layout: str,
     image_mode: str = "yandex_disk",
+    photos_root: Path | None = None,
     downloader: YandexDiskDownloadUrls | None = None,
 ) -> str:
     if not store_photos.files:
@@ -534,6 +570,7 @@ def build_store_photo_urls(
             article=article,
             layout=layout,
             store_prefix=store_photos.prefix,
+            photos_root=photos_root,
             downloader=downloader,
         )
     if image_mode == "server_https":
@@ -545,6 +582,7 @@ def build_store_photo_urls(
             article=article,
             layout=layout,
             store_prefix=store_photos.prefix,
+            photos_root=photos_root,
         )
     return yandex_disk_urls_from_files(
         store_photos.files,
@@ -552,6 +590,7 @@ def build_store_photo_urls(
         article=article,
         layout=layout,
         store_prefix=store_photos.prefix,
+        photos_root=photos_root,
     )
 
 

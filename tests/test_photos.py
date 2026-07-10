@@ -15,6 +15,7 @@ from avito.photos import (
     prefixed_stem_variants,
     resolve_listing_photo_sets,
     select_store_when_conflict,
+    server_https_urls_from_files,
     yandex_disk_urls_from_files,
 )
 from avito.stores import Store, StoresConfig
@@ -72,8 +73,45 @@ class TestPhotos(unittest.TestCase):
                 article="165309",
                 layout="store_subdir",
                 store_prefix="md",
+                photos_root=folder,
             )
             self.assertIn("yandex_disk://Авито/md/md165309-5.jpg", u)
+
+    def test_server_https_model_in_root_not_md_subdir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            f = folder / "Yokohama Geolandar G015.jpg"
+            f.write_bytes(b"x")
+            u = server_https_urls_from_files(
+                [f],
+                photos_public_base_url="https://avito.shinaufa.ru/photos",
+                article="218145",
+                layout="store_subdir",
+                store_prefix="md",
+                photos_root=folder,
+            )
+            self.assertIn(
+                "https://avito.shinaufa.ru/photos/Yokohama%20Geolandar%20G015.jpg",
+                u,
+            )
+            self.assertNotIn("/photos/md/Yokohama", u)
+
+    def test_server_https_article_in_store_subdir(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            sub = folder / "md"
+            sub.mkdir()
+            f = sub / "218145.jpg"
+            f.write_bytes(b"x")
+            u = server_https_urls_from_files(
+                [f],
+                photos_public_base_url="https://avito.shinaufa.ru/photos",
+                article="218145",
+                layout="store_subdir",
+                store_prefix="md",
+                photos_root=folder,
+            )
+            self.assertIn("https://avito.shinaufa.ru/photos/md/218145.jpg", u)
 
     def test_discover_multi_store(self):
         with tempfile.TemporaryDirectory() as tmp:

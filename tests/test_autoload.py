@@ -238,7 +238,7 @@ class TestAutoload(unittest.TestCase):
         self.assertEqual(cleared, 1)
         self.assertFalse(str(ws.cell(5, 3).value or "").strip())
 
-    def test_sync_photos_preserves_avito_hosted_urls(self):
+    def test_sync_photos_replaces_avito_hosted_with_article_photos(self):
         wb = Workbook()
         ws = wb.active
         avito_url = (
@@ -272,6 +272,80 @@ class TestAutoload(unittest.TestCase):
                 image_mode="yandex_disk",
                 yandex_disk_root="Авито",
             photos_public_base_url="",
+                photo_layout="flat",
+                photo_store_prefix_in_filename=True,
+                image_count=0,
+                image_ext="jpg",
+                convert_photos_to_jpeg=True,
+                jpeg_quality=92,
+                compress_photos=True,
+                jpeg_max_dimension=1920,
+                compress_min_kb=400,
+                model_photo_fallback=True,
+                photo_article_first=True,
+                manager_inbox_subdir="входящие",
+                photos_local_dir=folder,
+                verify_photos_on_disk=True,
+                model_descriptions_file=Path("m.xlsx"),
+                missing_models_file="missing.xlsx",
+                description_html="",
+                store_pitch_html="",
+                llm_store_brief="",
+                defaults={},
+                skip_without_photos=True,
+                include_all_goods_in_autoload=False,
+                no_photos_file="no_photos.xlsx",
+                avito_ids_file=Path("ids.csv"),
+            )
+            set_n, cleared = _sync_photo_urls_to_sheet(
+                ws,
+                photos_col=3,
+                title_col=2,
+                id_col=1,
+                posting_df=posting,
+                local_photos=folder,
+                cfg=cfg,
+                stores=_stores(),
+            )
+            self.assertEqual(set_n, 1)
+            self.assertEqual(cleared, 0)
+            self.assertIn("yandex_disk://", str(ws.cell(5, 3).value))
+            self.assertNotEqual(str(ws.cell(5, 3).value), avito_url)
+
+    def test_sync_photos_preserves_avito_hosted_for_model_only(self):
+        wb = Workbook()
+        ws = wb.active
+        avito_url = (
+            "http://avito.ru/autoload/1/items-to-feed/images?"
+            "imageSlug=model-on-avito"
+        )
+        ws.cell(2, 1, "Уникальный идентификатор объявления")
+        ws.cell(2, 2, "Название объявления")
+        ws.cell(2, 3, "Ссылки на фото")
+        ws.cell(5, 1, "md_99999")
+        ws.cell(5, 2, "Formula Energy 205/55 R16 91H")
+        ws.cell(5, 3, avito_url)
+        posting = pd.DataFrame(
+            [
+                {
+                    "номенклатура": "Formula Energy 205/55 R16 91H",
+                    "артикул": "99999",
+                    "recommended_price": 4000,
+                }
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "Formula Energy.jpg").write_bytes(b"x")
+            cfg = AutoloadSettings(
+                template_file=Path("t.xlsx"),
+                working_file=Path("w.xlsx"),
+                prefer_latest_avito_export=True,
+                close_not_in_goods=False,
+                sheet_name=None,
+                image_mode="yandex_disk",
+                yandex_disk_root="Авито",
+                photos_public_base_url="",
                 photo_layout="flat",
                 photo_store_prefix_in_filename=True,
                 image_count=0,

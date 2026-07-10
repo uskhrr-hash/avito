@@ -445,6 +445,16 @@ def _resolve_yandex_downloader(
     return YandexDiskDownloadUrls(token)
 
 
+def _should_replace_photo_urls(current: str, *, source: str) -> bool:
+    """
+    Фото артикула всегда пишем в файл (замена модели или ссылок Avito).
+    Модель — не трогаем уже принятые Avito-ссылки.
+    """
+    if source == "article":
+        return True
+    return not is_avito_hosted_photo_urls(current)
+
+
 def _photo_urls_for_article(
     local_photos: Path | None,
     article: str,
@@ -454,9 +464,9 @@ def _photo_urls_for_article(
     brand: str = "",
     model: str = "",
     yandex_downloader: YandexDiskDownloadUrls | None = None,
-) -> str:
+) -> tuple[str, str]:
     if not local_photos or not article:
-        return ""
+        return "", ""
     resolved = resolve_listing_photo_sets(
         local_photos,
         article,
@@ -472,7 +482,7 @@ def _photo_urls_for_article(
         jpeg_quality=cfg.jpeg_quality,
     )
     if not resolved.store_sets:
-        return ""
+        return "", ""
     sp = resolved.store_sets[0]
     urls = build_store_photo_urls(
         sp,
@@ -480,11 +490,12 @@ def _photo_urls_for_article(
         article=article,
         layout=cfg.photo_layout,
         image_mode=cfg.image_mode,
+        photos_root=local_photos,
         downloader=yandex_downloader,
     )
     if cfg.image_mode == "yandex_disk":
-        return normalize_yandex_photo_urls(urls)
-    return urls
+        return normalize_yandex_photo_urls(urls), resolved.source
+    return urls, resolved.source
 
 
 def _article_for_sheet_row(
@@ -523,7 +534,7 @@ def _sync_photo_urls_to_sheet(
     Фото только если файлы есть на Диске; иначе ячейку очищаем.
 
     Без этого при копировании prototype в новые строки тянутся чужие ссылки.
-    Рабочие ссылки Avito (http://avito.ru/autoload/...) не перезаписываем.
+    Ссылки Avito не перезаписываем, кроме замены на фото артикула.
     """
     if not photos_col:
         return 0, 0
@@ -534,8 +545,6 @@ def _sync_photo_urls_to_sheet(
 
     for row_idx in range(DATA_START_ROW, ws.max_row + 1):
         current = str(ws.cell(row_idx, photos_col).value or "").strip()
-        if is_avito_hosted_photo_urls(current):
-            continue
 
         article = _article_for_sheet_row(
             ws,
@@ -551,7 +560,7 @@ def _sync_photo_urls_to_sheet(
                 parsed = parse_title_fields(nom)
                 brand = parsed.get("brand", "")
                 model = parsed.get("model", "")
-        photos = _photo_urls_for_article(
+        photos, source = _photo_urls_for_article(
             local_photos,
             article,
             stores,
@@ -562,10 +571,10 @@ def _sync_photo_urls_to_sheet(
         )
 
         if photos:
-            if current != photos:
+            if current != photos and _should_replace_photo_urls(current, source=source):
                 ws.cell(row_idx, photos_col, photos)
                 set_count += 1
-        elif current:
+        elif current and _should_replace_photo_urls(current, source=""):
             ws.cell(row_idx, photos_col, "")
             cleared += 1
 
@@ -1371,6 +1380,7 @@ def fill_autoload_template(
                 article=article,
                 layout=cfg.photo_layout,
                 image_mode=cfg.image_mode,
+                photos_root=local_photos,
                 downloader=yandex_downloader,
             )
             if cfg.image_mode == "yandex_disk":
@@ -1406,7 +1416,9 @@ def fill_autoload_template(
             ws.cell(row_idx, c_price, price_int)
             if c_photos and photos:
                 current_photos = str(ws.cell(row_idx, c_photos).value or "").strip()
-                if not is_avito_hosted_photo_urls(current_photos):
+                if current_photos != photos and _should_replace_photo_urls(
+                    current_photos, source=resolved_photos.source
+                ):
                     ws.cell(row_idx, c_photos, photos)
             if c_desc:
                 ws.cell(

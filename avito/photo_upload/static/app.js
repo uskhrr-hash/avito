@@ -62,11 +62,11 @@
   async function lookupArticle() {
     const article = currentArticle();
     if (!article) {
-      articleHint.textContent = "Введите артикул — покажем название шины";
+      articleHint.textContent = "Введите артикул шины";
       articleHint.className = "hint";
       return;
     }
-    const response = await fetch(`/api/stock/lookup?article=${encodeURIComponent(article)}`);
+    const response = await fetch(`api/stock/lookup?article=${encodeURIComponent(article)}`);
     if (!response.ok) return;
     const data = await response.json();
     if (data.found) {
@@ -85,7 +85,7 @@
       searchResults.innerHTML = "";
       return;
     }
-    const response = await fetch(`/api/stock/search?q=${encodeURIComponent(q)}`);
+    const response = await fetch(`api/stock/search?q=${encodeURIComponent(q)}`);
     if (!response.ok) return;
     const rows = await response.json();
     if (!rows.length) {
@@ -111,7 +111,7 @@
   }
 
   async function nextIndexForArticle(article) {
-    const response = await fetch(`/api/next-index?article=${encodeURIComponent(article)}`);
+    const response = await fetch(`api/next-index?article=${encodeURIComponent(article)}`);
     if (!response.ok) {
       throw new Error("Не удалось получить номер фото");
     }
@@ -170,7 +170,7 @@
     }
 
     try {
-      const response = await fetch("/api/upload", {
+      const response = await fetch("api/upload", {
         method: "POST",
         body: formData,
       });
@@ -201,7 +201,7 @@
 
   async function loadQueue() {
     queueList.innerHTML = "<p class='muted'>Загрузка…</p>";
-    const response = await fetch("/api/no-photos?limit=80");
+    const response = await fetch("api/no-photos?limit=80");
     if (!response.ok) {
       queueList.innerHTML = "<p class='muted'>Не удалось загрузить список</p>";
       return;
@@ -222,14 +222,14 @@
         searchResults.classList.add("hidden");
         lookupArticle();
         renderPending();
-        window.scrollTo({ top: 0, behavior: "smooth" });
+        document.querySelector(".card-camera")?.scrollIntoView({ behavior: "smooth", block: "start" });
       });
       queueList.appendChild(button);
     }
   }
 
   document.getElementById("logout").addEventListener("click", async () => {
-    await fetch("/api/logout", { method: "POST" });
+    await fetch("api/logout", { method: "POST" });
     window.location.reload();
   });
 

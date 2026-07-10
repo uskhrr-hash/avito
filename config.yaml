@@ -50,6 +50,7 @@ photo_upload:
   port: 8765
   session_max_age_hours: 72
   max_upload_mb: 12
+  public_mount_path: /photo
 
 compare:
   stock_only: true

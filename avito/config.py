@@ -102,6 +102,7 @@ class PhotoUploadSettings:
     port: int
     session_max_age_hours: int
     max_upload_mb: int
+    public_mount_path: str
 
 
 @dataclass
@@ -348,10 +349,14 @@ def _load_autoload(raw: dict) -> AutoloadSettings:
 
 
 def _load_photo_upload(raw: dict) -> PhotoUploadSettings:
+    mount = str(raw.get("public_mount_path", "/photo")).strip() or "/photo"
+    if not mount.startswith("/"):
+        mount = f"/{mount}"
     return PhotoUploadSettings(
         enabled=bool(raw.get("enabled", False)),
         host=str(raw.get("host", "127.0.0.1")),
         port=int(raw.get("port", 8765)),
         session_max_age_hours=int(raw.get("session_max_age_hours", 72)),
         max_upload_mb=int(raw.get("max_upload_mb", 12)),
+        public_mount_path=mount.rstrip("/") or "/photo",
     )

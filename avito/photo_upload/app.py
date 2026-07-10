@@ -211,43 +211,59 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
     return app
 
 
+def _mount_base(runtime: PhotoUploadRuntime) -> str:
+    mount = (runtime.public_mount_path or "/photo").strip()
+    if not mount.startswith("/"):
+        mount = f"/{mount}"
+    return mount.rstrip("/") + "/"
+
+
 def _login_html(runtime: PhotoUploadRuntime) -> str:
-    stores_json = json.dumps(
-        [{"prefix": s.prefix, "label": s.label} for s in runtime.stores],
-        ensure_ascii=False,
+    base = _mount_base(runtime)
+    store_cards = "\n".join(
+        f'''        <button type="button" class="store-card" data-prefix="{s.prefix}">
+          <strong>{s.label}</strong>
+          <span>Магазин {s.prefix}</span>
+        </button>'''
+        for s in runtime.stores
     )
     return f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <base href="{base}">
   <title>Вход — фото Avito</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="static/app.css">
 </head>
 <body class="page-login">
   <main class="shell">
-    <h1>Фото для Avito</h1>
-    <p class="lead">Выберите магазин и введите пароль</p>
+    <h1>Фото Avito</h1>
+    <p class="lead">Нажмите на свой магазин и введите пароль</p>
     <form id="login-form" class="card">
-      <label class="field">
-        <span>Магазин</span>
-        <select id="store" required></select>
-      </label>
+      <p class="field"><span>Магазин</span></p>
+      <div class="store-grid" id="store-grid">
+{store_cards}
+      </div>
+      <input type="hidden" id="store" name="store" value="">
       <label class="field">
         <span>Пароль</span>
-        <input id="password" type="password" autocomplete="current-password" required>
+        <input id="password" type="password" autocomplete="current-password" inputmode="text" required placeholder="Пароль магазина">
       </label>
       <p id="login-error" class="error hidden"></p>
       <button type="submit" class="btn btn-primary">Войти</button>
     </form>
   </main>
-  <script>window.PHOTO_UPLOAD_STORES = {stores_json};</script>
-  <script src="/static/login.js"></script>
+  <script src="static/login.js"></script>
 </body>
 </html>"""
 
 
 def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
+    base = _mount_base(runtime)
     store_json = json.dumps(
         {"prefix": store.prefix, "label": store.label},
         ensure_ascii=False,
@@ -256,12 +272,15 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+  <meta name="theme-color" content="#2563eb">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <base href="{base}">
   <title>Фото — {store.label}</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="stylesheet" href="static/app.css">
 </head>
-<body>
+<body class="page-app">
   <header class="topbar">
     <div>
       <div class="topbar-title">Фото Avito</div>
@@ -271,43 +290,41 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
   </header>
 
   <main class="shell">
-    <section class="card">
+    <section class="card card-article">
       <label class="field">
         <span>Артикул</span>
-        <input id="article" type="search" inputmode="numeric" autocomplete="off" placeholder="Например 124889">
+        <input id="article" type="search" inputmode="numeric" pattern="[0-9]*" autocomplete="off" placeholder="124889" enterkeyhint="done">
       </label>
-      <div id="article-hint" class="hint">Введите артикул — покажем название шины</div>
+      <div id="article-hint" class="hint">Введите артикул шины</div>
       <div id="search-results" class="search-results hidden"></div>
     </section>
 
-    <section class="card">
+    <section class="card card-camera">
       <div class="row-between">
         <h2>Снимки</h2>
         <span id="pending-count" class="badge">0</span>
       </div>
-      <p class="muted">Сфотографируйте, проверьте превью и удалите лишнее. На сервер — только по кнопке внизу.</p>
       <div id="pending-list" class="pending-list"></div>
-      <label class="btn btn-secondary file-btn">
+      <label class="btn btn-camera file-btn">
         <input id="camera" type="file" accept="image/*" capture="environment" hidden>
-        Сфотографировать
+        📷 Сфотографировать
       </label>
     </section>
 
-    <section class="card">
-      <div class="row-between">
-        <h2>Без фото</h2>
-        <button type="button" id="refresh-queue" class="btn btn-ghost">Обновить</button>
-      </div>
+    <details class="card section-queue">
+      <summary>Нет фото — снять из списка</summary>
+      <p class="muted" style="margin: 8px 0 0">Нажмите на позицию — подставится артикул</p>
+      <button type="button" id="refresh-queue" class="btn btn-ghost" style="margin-top:10px;width:100%">Обновить список</button>
       <div id="queue-list" class="queue-list"></div>
-    </section>
-
-    <div class="bottom-bar">
-      <button type="button" id="upload" class="btn btn-primary" disabled>Отправить на сервер</button>
-    </div>
+    </details>
   </main>
+
+  <div class="bottom-bar">
+    <button type="button" id="upload" class="btn btn-primary" disabled>Отправить на сервер</button>
+  </div>
 
   <div id="toast" class="toast"></div>
   <script>window.PHOTO_UPLOAD_SESSION = {store_json};</script>
-  <script src="/static/app.js"></script>
+  <script src="static/app.js"></script>
 </body>
 </html>"""

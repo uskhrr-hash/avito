@@ -31,6 +31,7 @@ class PhotoUploadRuntime:
     jpeg_quality: int
     jpeg_max_dimension: int
     max_upload_bytes: int
+    public_mount_path: str
 
 
 def load_photo_upload_runtime(
@@ -91,4 +92,5 @@ def load_photo_upload_runtime(
         jpeg_quality=app.autoload.jpeg_quality,
         jpeg_max_dimension=app.autoload.jpeg_max_dimension,
         max_upload_bytes=max_mb * 1024 * 1024,
+        public_mount_path=app.photo_upload.public_mount_path,
     )

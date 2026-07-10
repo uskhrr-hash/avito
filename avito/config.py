@@ -129,6 +129,14 @@ class StockSourcesSettings:
     google_columns: dict[str, str]
     google_avito_price_column_index: int
     db_enabled: bool
+    db_min_quantity: int
+    db_moscow_min_quantity: int
+    db_supplier_ufa: str
+    db_supplier_moscow: str
+    db_ushk_prefix: str
+    db_ufa_multiplier: float
+    db_moscow_multiplier: float
+    db_excluded_suppliers: tuple[str, ...]
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -253,6 +261,13 @@ def _load_descriptions_db(raw: dict, root: Path) -> DescriptionsDbSettings:
 def _load_stock_sources(raw: dict) -> StockSourcesSettings:
     g_raw = raw.get("google") or {}
     d_raw = raw.get("db") or {}
+    excluded = d_raw.get("excluded_suppliers") or [
+        "Сам МБ прочие",
+        "Вектра Екб",
+        "Вектра Уфа",
+        "Колобокс Нижний",
+        "Колобокс Уфа",
+    ]
     return StockSourcesSettings(
         enabled=bool(raw.get("enabled", False)),
         secrets_file=Path(raw.get("secrets_file", "secrets.local.yaml")),
@@ -270,6 +285,14 @@ def _load_stock_sources(raw: dict) -> StockSourcesSettings:
         },
         google_avito_price_column_index=int(g_raw.get("avito_price_column_index", 6)),
         db_enabled=bool(d_raw.get("enabled", True)),
+        db_min_quantity=int(d_raw.get("min_quantity", 4)),
+        db_moscow_min_quantity=int(d_raw.get("moscow_min_quantity", 40)),
+        db_supplier_ufa=str(d_raw.get("supplier_ufa", "Сам МБ Уфа")).strip(),
+        db_supplier_moscow=str(d_raw.get("supplier_moscow", "Сам МБ Москва")).strip(),
+        db_ushk_prefix=str(d_raw.get("ushk_prefix", "УШК")).strip(),
+        db_ufa_multiplier=float(d_raw.get("ufa_multiplier", 0.9)),
+        db_moscow_multiplier=float(d_raw.get("moscow_multiplier", 0.9)),
+        db_excluded_suppliers=tuple(str(x).strip() for x in excluded if str(x).strip()),
     )
 
 

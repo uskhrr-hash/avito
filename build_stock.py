@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from avito.config import load_config
-from avito.stock_sources import load_secrets, refresh_goods_file
+from avito.stock_sources import load_secrets, refresh_goods_file, summarize_sources
 
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("build_stock")
@@ -35,8 +35,11 @@ def main() -> int:
 
     out, merged = refresh_goods_file(cfg, root=ROOT, secrets=secrets)
     g_count = sum(1 for r in merged if r.source == "google")
-    d_count = sum(1 for r in merged if r.source == "db")
+    d_count = sum(1 for r in merged if r.source.startswith("db:"))
     LOG.info("Google: %s, DB: %s, итого: %s → %s", g_count, d_count, len(merged), out)
+    prio = summarize_sources(merged)
+    if prio:
+        LOG.info("Приоритеты: %s", ", ".join(f"{k}={v}" for k, v in sorted(prio.items())))
     return 0
 
 

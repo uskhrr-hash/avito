@@ -139,7 +139,7 @@ def main() -> int:
         own_rows: list[dict] = []
         posting, problems, _ = build_posting_rows(stock, avito_mins, cmp_cfg, stamp)
         LOG.info(
-            "Режим stock_only: цены из колонки avito_price или входящая×%.2f",
+            "Режим stock_only: базовая цена × %.2f",
             cmp_cfg.no_avito_multiplier,
         )
     else:
@@ -177,10 +177,9 @@ def main() -> int:
     out_path = args.output_dir / f"posting_{stamp}.xlsx"
     write_posting_xlsx(out_path, posting, problems, own_rows, match_rows)
 
-    fixed = sum(1 for p in posting if p.get("price_rule") == "fixed_google")
-    calc = len(posting) - fixed
+    calc = len(posting)
     LOG.info("Остатки: %s (%s позиций)", stock_path.name, len(stock))
-    LOG.info("К выкладке: %s (фикс %s, расчёт %s)", len(posting), fixed, calc)
+    LOG.info("К выкладке: %s (база × %.2f)", len(posting), cmp_cfg.no_avito_multiplier)
     LOG.info("→ %s", out_path)
     return 0
 

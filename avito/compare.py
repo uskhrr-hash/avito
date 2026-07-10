@@ -11,7 +11,6 @@ from avito.stock_sources import GOODS_COLUMN_COUNT, is_legacy_goods_format
 from avito.own import is_own_listing
 from avito.pricing import (
     PriceRecommendation,
-    fixed_price_recommendation,
     recommend_price,
     round_price_to_tens,
 )
@@ -340,23 +339,15 @@ def build_posting_rows(
 
         # остатки в нашем формате; avito_min по name_canonical после normalize_avito.py
         avito_min = avito_mins.get(key)
-        if row.avito_price is not None:
-            rec = fixed_price_recommendation(
-                row.avito_price,
-                row.incoming,
-                avito_min,
-                floor_multiplier=cfg.floor_multiplier,
-            )
-        else:
-            rec = recommend_price(
-                row.incoming,
-                avito_min,
-                seed=key,
-                date_key=date_key,
-                no_avito_multiplier=cfg.no_avito_multiplier,
-                floor_multiplier=cfg.floor_multiplier,
-                discounts=cfg.avito_discounts,
-            )
+        rec = recommend_price(
+            row.incoming,
+            avito_min,
+            seed=key,
+            date_key=date_key,
+            no_avito_multiplier=cfg.no_avito_multiplier,
+            floor_multiplier=cfg.floor_multiplier,
+            discounts=cfg.avito_discounts,
+        )
 
         posting.append(_posting_record(row, rec, avito_min, duplicate=(seen_nom[key] > 1)))
 

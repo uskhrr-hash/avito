@@ -24,7 +24,7 @@ def _cfg() -> CompareSettings:
 
 
 class TestComparePricing(unittest.TestCase):
-    def test_fixed_price_when_set(self):
+    def test_base_price_multiplied_for_avito(self):
         stock = [
             StockRow(
                 article="1",
@@ -35,8 +35,8 @@ class TestComparePricing(unittest.TestCase):
             )
         ]
         posting, _, _ = build_posting_rows(stock, {}, _cfg(), "2026-06-10")
-        self.assertEqual(posting[0]["recommended_price"], 5500)
-        self.assertEqual(posting[0]["price_rule"], "fixed_google")
+        self.assertEqual(posting[0]["recommended_price"], 4600)
+        self.assertEqual(posting[0]["price_rule"], "no_avito_x1.15")
         self.assertEqual(posting[0]["цена_avito_фикс"], 5500)
 
     def test_calculated_when_fixed_empty(self):

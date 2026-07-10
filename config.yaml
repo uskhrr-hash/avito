@@ -1,6 +1,6 @@
 # --- Ежедневный пайплайн (run_daily.bat) ---
 # build_stock → process_manager_inbox → compare_prices → build_autoload
-# Парсер Avito отключён: цены только из остатков (Google avito_price или входящая×1.15)
+# Парсер Avito отключён: цены только из остатков (база × 1.15)
 
 stores_file: stores.yaml
 
@@ -22,6 +22,19 @@ stock_sources:
     avito_price_column_index: 6
   db:
     enabled: true
+    min_quantity: 4
+    moscow_min_quantity: 40
+    supplier_ufa: Сам МБ Уфа
+    supplier_moscow: Сам МБ Москва
+    ushk_prefix: УШК
+    ufa_multiplier: 0.9
+    moscow_multiplier: 0.9
+    excluded_suppliers:
+      - Сам МБ прочие
+      - Вектра Екб
+      - Вектра Уфа
+      - Колобокс Нижний
+      - Колобокс Уфа
 
 descriptions_db:
   enabled: true

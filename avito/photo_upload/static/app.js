@@ -8,6 +8,7 @@
   const uploadBtn = document.getElementById("upload");
   const queueList = document.getElementById("queue-list");
   const refreshQueueBtn = document.getElementById("refresh-queue");
+  const inStoreOnly = document.getElementById("in-store-only");
   const toast = document.getElementById("toast");
   const loadingEl = document.getElementById("loading");
   const loadingText = document.getElementById("loading-text");
@@ -233,7 +234,11 @@
 
   async function loadQueue() {
     queueList.innerHTML = "<p class='muted'>Загрузка списка…</p>";
-    const response = await fetch("api/no-photos?limit=80");
+    const params = new URLSearchParams({ limit: "80" });
+    if (inStoreOnly && inStoreOnly.checked) {
+      params.set("in_store", "1");
+    }
+    const response = await fetch(`api/no-photos?${params.toString()}`);
     if (!response.ok) {
       queueList.innerHTML = "<p class='muted'>Не удалось загрузить список</p>";
       return;
@@ -251,7 +256,11 @@
     if (payload.source_file) {
       const meta = document.createElement("p");
       meta.className = "queue-meta";
-      meta.textContent = `${rows.length} позиций · ${payload.source_file}`;
+      let label = `${rows.length} позиций · ${payload.source_file}`;
+      if (payload.in_store_only && payload.ushk_supplier) {
+        label += ` · только ${payload.ushk_supplier}`;
+      }
+      meta.textContent = label;
       queueList.appendChild(meta);
     }
 
@@ -277,6 +286,9 @@
   });
 
   refreshQueueBtn.addEventListener("click", loadQueue);
+  if (inStoreOnly) {
+    inStoreOnly.addEventListener("change", loadQueue);
+  }
 
   renderPending();
   loadQueue();

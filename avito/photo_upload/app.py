@@ -132,10 +132,17 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         )
 
     @app.get("/api/no-photos")
-    async def api_no_photos(request: Request, limit: int = 80) -> JSONResponse:
+    async def api_no_photos(
+        request: Request,
+        limit: int = 80,
+        in_store: int = 0,
+    ) -> JSONResponse:
         store = _require_store(request, runtime)
         result = load_no_photos_queue_info(
-            runtime, store_prefix=store.prefix, limit=min(limit, 200)
+            runtime,
+            store_prefix=store.prefix,
+            limit=min(limit, 200),
+            in_store_only=bool(in_store),
         )
         return JSONResponse(
             {
@@ -151,6 +158,8 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 "source_file": result.source_file,
                 "hint": result.hint,
                 "count": len(result.items),
+                "in_store_only": bool(in_store),
+                "ushk_supplier": store.ushk_supplier,
             }
         )
 
@@ -319,6 +328,10 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
     <details class="card section-queue" open>
       <summary>Нет фото — снять из списка</summary>
       <p class="muted queue-hint">Нажмите на позицию — подставится артикул</p>
+      <label class="toggle-row">
+        <input type="checkbox" id="in-store-only">
+        <span>Есть в магазине (по реестру УШК)</span>
+      </label>
       <button type="button" id="refresh-queue" class="btn btn-ghost btn-block">Обновить список</button>
       <div id="queue-list" class="queue-list"></div>
     </details>

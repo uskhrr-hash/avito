@@ -8,6 +8,7 @@ from pathlib import Path
 import yaml
 
 from avito.config import AppConfig, load_config
+from avito.stores import StoresConfig
 
 
 @dataclass(frozen=True)
@@ -15,12 +16,15 @@ class StoreLogin:
     prefix: str
     label: str
     password: str
+    ushk_supplier: str | None = None
 
 
 @dataclass(frozen=True)
 class PhotoUploadRuntime:
     project_root: Path
     config: AppConfig
+    stores_config: StoresConfig
+    secrets_file: Path
     photos_dir: Path
     stock_file: Path
     output_dir: Path
@@ -63,7 +67,12 @@ def load_photo_upload_runtime(
                 f"Задайте photo_upload.stores.{store.prefix} в {secrets_path.name}"
             )
         stores.append(
-            StoreLogin(prefix=store.prefix, label=store.label, password=password)
+            StoreLogin(
+                prefix=store.prefix,
+                label=store.label,
+                password=password,
+                ushk_supplier=store.ushk_supplier,
+            )
         )
 
     photos_dir = app.autoload.photos_local_dir
@@ -78,10 +87,13 @@ def load_photo_upload_runtime(
 
     output_dir = root / "output"
     max_mb = max(1, app.photo_upload.max_upload_mb)
+    stores_config = app.stores
 
     return PhotoUploadRuntime(
         project_root=root,
         config=app,
+        stores_config=stores_config,
+        secrets_file=secrets_path,
         photos_dir=photos_dir,
         stock_file=stock_file,
         output_dir=output_dir,

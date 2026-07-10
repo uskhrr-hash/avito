@@ -15,6 +15,7 @@
 stores:
   - prefix: md
     label: Менделеева, Владислав
+    ushk_supplier: УШК Менделеева
     contact_person: Владислав
     phone: "79273181543"
     address: "Республика Башкортостан, Уфа, улица Менделеева, 21"
@@ -22,6 +23,7 @@ stores:
 
   - prefix: pg
     label: Пугачева, Антон
+    ushk_supplier: УШК Пугачева
     contact_person: Антон
     phone: "79930554001"
     address: "Республика Башкортостан, Уфа, улица Пугачева, 15/1"

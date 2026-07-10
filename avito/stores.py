@@ -24,6 +24,7 @@ class Store:
     prefix: str
     label: str
     fields: dict[str, str]
+    ushk_supplier: str | None = None
 
     def listing_id(self, article: str) -> str:
         art = str(article).strip()
@@ -62,7 +63,10 @@ def load_stores(path: Path) -> StoresConfig:
             for k in _STORE_FIELD_KEYS
             if k in item and str(item[k]).strip()
         }
-        stores.append(Store(prefix=prefix, label=label, fields=fields))
+        ushk = str(item.get("ushk_supplier", "") or "").strip() or None
+        stores.append(
+            Store(prefix=prefix, label=label, fields=fields, ushk_supplier=ushk)
+        )
     if not stores:
         raise ValueError(f"В {path} нет ни одного магазина (stores)")
 

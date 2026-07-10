@@ -59,8 +59,10 @@ class TestPhotoUploadService(unittest.TestCase):
 stores:
   - prefix: md
     label: Test MD
+    ushk_supplier: УШК Менделеева
   - prefix: pg
     label: Test PG
+    ushk_supplier: УШК Пугачева
 legacy_unprefixed_store: md
 """.strip(),
             encoding="utf-8",
@@ -112,6 +114,7 @@ photo_upload:
         (output / "autoload_no_photos_2026-07-10.csv").write_text(
             "артикул,номенклатура,магазины,проблема\n"
             "124889,Test Tire 205/55 R16,md,нет фото\n"
+            "103918,Another Tire,md,нет фото\n"
             "999999,Other,pg,нет фото\n",
             encoding="utf-8",
         )
@@ -129,8 +132,22 @@ photo_upload:
             from avito.photo_upload.service import load_no_photos_queue_info
 
             result = load_no_photos_queue_info(runtime, store_prefix="md")
-            self.assertEqual(len(result.items), 1)
+            self.assertEqual(len(result.items), 2)
             self.assertEqual(result.items[0].article, "124889")
+
+    def test_no_photos_queue_in_store_filter(self):
+        with tempfile.TemporaryDirectory() as tmp_name:
+            runtime = self._runtime(Path(tmp_name))
+            from avito.photo_upload.service import load_no_photos_queue_info
+
+            result = load_no_photos_queue_info(
+                runtime,
+                store_prefix="md",
+                in_store_only=True,
+                in_store_articles=frozenset({"103918"}),
+            )
+            self.assertEqual(len(result.items), 1)
+            self.assertEqual(result.items[0].article, "103918")
 
     def test_next_photo_index(self):
         with tempfile.TemporaryDirectory() as tmp_name:

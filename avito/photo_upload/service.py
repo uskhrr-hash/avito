@@ -8,10 +8,13 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 from avito.compare import load_stock
 from avito.manager_inbox import photo_filename, photo_relative_path, photo_target_path
 from avito.photo_convert import compress_image_in_place, convert_image_to_jpeg
 from avito.photo_upload.settings import PhotoUploadRuntime
+from avito.store_registry import fetch_articles_at_supplier
 
 LOG = logging.getLogger(__name__)
 
@@ -118,19 +121,43 @@ def load_no_photos_queue_info(
     *,
     store_prefix: str,
     limit: int = 80,
+    in_store_only: bool = False,
+    in_store_articles: frozenset[str] | None = None,
 ) -> NoPhotosQueueResult:
     path = _latest_no_photos_csv(runtime)
     prefix = store_prefix.strip()
+    store = runtime.stores_config.get(prefix)
+    ushk_name = store.ushk_supplier if store else None
+
     if path is None:
         return NoPhotosQueueResult(
             [],
             None,
             "Список ещё не собран. На сервере запустите: build_stock → compare_prices → build_autoload",
         )
+
+    if in_store_only and not ushk_name:
+        return NoPhotosQueueResult(
+            [],
+            path.name,
+            f"Для магазина {prefix} не задан ushk_supplier в stores.yaml",
+        )
+
     items = load_no_photos_queue(
-        runtime, store_prefix=store_prefix, limit=limit
+        runtime,
+        store_prefix=store_prefix,
+        limit=limit,
+        in_store_only=in_store_only,
+        in_store_articles=in_store_articles,
     )
+
     if not items:
+        if in_store_only and ushk_name:
+            return NoPhotosQueueResult(
+                [],
+                path.name,
+                f"Нет позиций без фото, которые есть на {ushk_name} (реестр, от 4 шт)",
+            )
         return NoPhotosQueueResult(
             [],
             path.name,
@@ -144,11 +171,26 @@ def load_no_photos_queue(
     *,
     store_prefix: str,
     limit: int = 80,
+    in_store_only: bool = False,
+    in_store_articles: frozenset[str] | None = None,
 ) -> list[NoPhotoItem]:
     path = _latest_no_photos_csv(runtime)
     if path is None:
         return []
     prefix = store_prefix.strip().lower()
+    store = runtime.stores_config.get(store_prefix.strip())
+    ushk_name = store.ushk_supplier if store else None
+
+    registry: frozenset[str] | None = None
+    if in_store_only:
+        if in_store_articles is not None:
+            registry = in_store_articles
+        elif ushk_name:
+            secrets = yaml.safe_load(runtime.secrets_file.read_text(encoding="utf-8")) or {}
+            registry = fetch_articles_at_supplier(secrets, ushk_name)
+        else:
+            return []
+
     out: list[NoPhotoItem] = []
     with path.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -158,6 +200,8 @@ def load_no_photos_queue(
                 continue
             article = str(row.get("артикул", "")).strip()
             if not article:
+                continue
+            if registry is not None and article not in registry:
                 continue
             out.append(
                 NoPhotoItem(

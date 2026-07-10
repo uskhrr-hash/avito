@@ -316,10 +316,10 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
       </label>
     </section>
 
-    <details class="card section-queue">
+    <details class="card section-queue" open>
       <summary>Нет фото — снять из списка</summary>
-      <p class="muted" style="margin: 8px 0 0">Нажмите на позицию — подставится артикул</p>
-      <button type="button" id="refresh-queue" class="btn btn-ghost" style="margin-top:10px;width:100%">Обновить список</button>
+      <p class="muted queue-hint">Нажмите на позицию — подставится артикул</p>
+      <button type="button" id="refresh-queue" class="btn btn-ghost btn-block">Обновить список</button>
       <div id="queue-list" class="queue-list"></div>
     </details>
   </main>

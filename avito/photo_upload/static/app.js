@@ -250,8 +250,7 @@
     queueList.innerHTML = "";
     if (payload.source_file) {
       const meta = document.createElement("p");
-      meta.className = "muted";
-      meta.style.margin = "0 0 8px";
+      meta.className = "queue-meta";
       meta.textContent = `${rows.length} позиций · ${payload.source_file}`;
       queueList.appendChild(meta);
     }

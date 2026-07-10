@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import sys
 import time
 from pathlib import Path
@@ -125,9 +126,55 @@ def _dismiss_popups(page: Page) -> None:
             pass
 
 
-def wait_between_pages(delay_sec: float) -> None:
-    if delay_sec > 0:
-        time.sleep(delay_sec)
+def _random_pause(base_sec: float, *, jitter_sec: float = 0, minimum_sec: float = 1.0) -> float:
+    if base_sec <= 0:
+        return 0.0
+    if jitter_sec > 0:
+        pause = base_sec + random.uniform(-jitter_sec, jitter_sec)
+    else:
+        pause = base_sec
+    return max(minimum_sec, pause)
+
+
+def wait_between_pages(delay_sec: float, *, jitter_sec: float = 0) -> float:
+    """Пауза между страницами; jitter — разброс ±сек вокруг delay. Возвращает фактическую паузу."""
+    pause = _random_pause(delay_sec, jitter_sec=jitter_sec)
+    if pause > 0:
+        time.sleep(pause)
+    return pause
+
+
+def compute_scrape_pause(
+    next_page_num: int,
+    *,
+    base_sec: float,
+    jitter_sec: float,
+    step_sec: float = 0,
+    step_from_page: int = 5,
+    rest_every: int = 0,
+    rest_sec: float = 0,
+    rest_jitter_sec: float = 0,
+) -> tuple[float, str]:
+    """
+    Пауза перед загрузкой next_page_num.
+    С ростом номера страницы база чуть увеличивается; каждые rest_every — длинный отдых.
+    """
+    extra_steps = max(0, next_page_num - step_from_page)
+    effective_base = base_sec + extra_steps * step_sec
+    pause = _random_pause(effective_base, jitter_sec=jitter_sec)
+    note = ""
+    if rest_every > 0 and next_page_num > 1 and (next_page_num - 1) % rest_every == 0:
+        rest = _random_pause(rest_sec, jitter_sec=rest_jitter_sec, minimum_sec=10.0)
+        pause += rest
+        note = f", отдых {rest:.0f} с"
+    return pause, note
+
+
+def sleep_scrape_pause(next_page_num: int, **kwargs) -> tuple[float, str]:
+    pause, note = compute_scrape_pause(next_page_num, **kwargs)
+    if pause > 0:
+        time.sleep(pause)
+    return pause, note
 
 
 def pause_before_close(*, interactive: bool) -> None:

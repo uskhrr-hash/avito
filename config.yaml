@@ -1,54 +1,147 @@
-search_url: "https://www.avito.ru/ufa/zapchasti_i_aksessuary/shiny_diski_i_kolesa/shiny-ASgBAgICAkQKJooLgJ0B?f=ASgBAgICA0QKJooLgJ0B0LcN0oUz&localPriority=1"
+# --- Ежедневный пайплайн (run_daily.bat) ---
+# build_stock → process_manager_inbox → compare_prices → build_autoload
+# Парсер Avito отключён: цены только из остатков (Google avito_price или входящая×1.15)
 
-max_pages: 0
-page_delay_sec: 2.5
-browser_profile_dir: .browser_profile
-headless: true
+stores_file: stores.yaml
 
-own_seller_names:
-  - "Шинный Центр №1"
+stock_sources:
+  enabled: true
+  secrets_file: secrets.local.yaml
+  output_file: input/goods.xlsx
+  google:
+    enabled: true
+    csv_url: https://docs.google.com/spreadsheets/d/e/2PACX-1vRueNtuxLTIbLTXKuGfYXUThpQvLJMzClkSodCgLAxjzcTSTShkl3QgDMzYx1LlbQTwHk0tB3LKdcEr/pubhtml
+    spreadsheet_id: 17t6-RP1koXxsCK-PkYiv8Lb2wQ2DMwVh6okxvQkVzNE
+    worksheet: Лист1
+    columns:
+      article: product_id
+      name: name
+      price: price
+      quantity: quantity
+      avito_price: avito_price
+    avito_price_column_index: 6
+  db:
+    enabled: true
+
+descriptions_db:
+  enabled: true
+  schema_sql: sql/avito_descriptions.sql
+  sqlite_schema_sql: sql/avito_descriptions_sqlite.sql
+  pg_schema: public
+  # Подключение: secrets.local.yaml → descriptions_db (отдельно от ERP db/alpha)
+  auto_approve_llm: true
+  llm_max_chars: 2500
+  fallback_to_xlsx: true
+
+# Публикация фида на VPS (avito.shinaufa.ru) + API автозагрузки
+avito_publish:
+  enabled: false
+  feed_name: shinaufa
+  feed_public_url: https://avito.shinaufa.ru/feeds/autoload.xlsx
+  # На VPS: каталог, откуда nginx отдаёт /feeds/
+  feed_local_dir: /var/www/avito-feed/feeds
+  auto_set_profile: true
+  auto_upload: true
+
+# Веб-страница для съёмки фото с телефона (run_photo_upload.py)
+photo_upload:
+  enabled: true
+  host: 127.0.0.1
+  port: 8765
+  session_max_age_hours: 72
+  max_upload_mb: 12
 
 compare:
+  stock_only: true
   stock_file: input/goods.xlsx
-  # В goods.xlsx нет строки заголовков: артикул | номенклатура | кол-во | цена
   stock_has_header: false
   stock_indexes:
     article: 0
     nomenclature: 1
     quantity: 2
     price: 3
-  # Если появится файл с заголовками — stock_has_header: true и имена колонок:
+    avito_price: 4
   article_column: Артикул
   nomenclature_column: Номенклатура
   incoming_price_column: Цена
   quantity_column: Количество
-  exclude_needs_review: true
   no_avito_multiplier: 1.15
-  floor_multiplier: 1.10
-  avito_discounts: [0.01, 0.02, 0.03]
+  floor_multiplier: 1.1
+  avito_discounts:
+  - 0.01
+  - 0.02
+  - 0.03
 
 autoload:
-  template_file: input/432801655_2026-05-29T09_58_00Z.xlsx
-  # лист с данными — второй («Шины… Легковые шины»), определяется автоматически
-  image_mode: yandex_disk
-  # Папка на Диске: https://disk.yandex.ru/client/disk/Авито
+  template_file: input/432801655_2026-06-10T09_50_00Z.xlsx
+  working_file: input/autoload_working.xlsx
+  prefer_latest_avito_export: true
+  close_not_in_goods: true
+  # На ПК: yandex_https. На VPS с фото на сервере: server_https
+  image_mode: yandex_https
+  photos_public_base_url: https://avito.shinaufa.ru/photos
   yandex_disk_root: Авито
-  # flat — все файлы в одной папке: 165935.jpeg, 165935-2.jpeg
-  # folder — Авито/58971/1.jpeg
-  photo_layout: flat
-  image_count: 4
-  # как на Диске: webp, jpeg, jpg, png (если буквально .web — укажите image_ext: web)
-  image_ext: webp
-  skip_without_photos: false
+  photo_layout: store_subdir
+  # false — в папке md файлы 124889.jpg; магазин только по имени папки (stores.yaml → prefix)
+  photo_store_prefix_in_filename: false
+  image_count: 0
+  image_ext: jpg
+  convert_photos_to_jpeg: true
+  jpeg_quality: 85
+  compress_photos: true
+  jpeg_max_dimension: 1920
+  compress_min_kb: 400
+  # Менеджеры: 124889.jpg (без префикса md). Папка «входящие» на Диске.
+  # false — чтобы объявление шло на магазин по префиксу фото (md124889.jpg), а не на legacy
+  photo_article_first: false
+  manager_inbox_subdir: входящие
+  # Если нет фото артикула — Yokohama Geolandar G015.jpg (бренд+модель)
+  model_photo_fallback: true
+  photos_local_dir: C:\Users\Ruslan\Yandex.Disk\Авито
+  no_photos_file: no_photos.xlsx
+  verify_photos_on_disk: true
+  model_descriptions_file: input/model_descriptions.xlsx
+  missing_models_file: missing_model_descriptions.xlsx
+  skip_without_photos: true
+  include_all_goods_in_autoload: false
   avito_ids_file: input/avito_ids.csv
-  description_html: >-
+  description_html: |
     <p><strong>Шины в наличии!</strong></p>
-    <p>Новые шины {nomenclature}</p>
+    <p>Новые шины &quot;{nomenclature}&quot;🛞🛞🛞</p>
+    <p><br></p>
+    <p><strong>Цена за наличные!</strong></p>
+    <p>✅Предоставляем услугу шиномонтажа 👨‍🔧👨‍🔧👨‍🔧</p>
+    <p><br></p>
+    <p>В наличии и под заказ большой выбор шин и дисков Российских и Зарубежных производителей</p>
+    <p><br></p>
+    <p>‼️Представлен не весь ассортимент магазина‼️ Звоните или пишите в любое время, подберем отличный вариант для Вас!</p>
+    <p>{model_description}</p>
+    <p><br></p>
+    {store_pitch}
+    <p>Артикул: {article}. Цена за 1 шт: {price_human} руб.</p>
+    <ul>
+    <li>Количество на складе: {quantity}</li>
+    <li>Самовывоз: {address}</li>
+    <li>Контакт: {contact_person}, {phone}</li>
+    <li>Связь: {contact_method}</li>
+    </ul>
+    <p>Перед выездом уточняйте актуальное наличие и стоимость.</p>
+  store_pitch_html: |
+    <p><strong>Почему покупают в Шинном Центре №1</strong></p>
+    <ul>
+    <li><strong>Шины в наличии</strong> — приезжайте, смотрите, сравнивайте на месте</li>
+    <li><strong>Честная цена за наличные</strong> — без скрытых накруток и сюрпризов при оплате</li>
+    <li><strong>Шиномонтаж на месте</strong> — поставили и поехали, не нужно искать сервис отдельно</li>
+    <li><strong>Подберём под ваш авто</strong> — звоните или пишите, поможем с размером и моделью</li>
+    <li><strong>Несколько точек в Уфе</strong> — удобный самовывоз, контакты в объявлении</li>
+    </ul>
+    <p>Работаем для частных клиентов и бизнеса. Приезжайте — убедитесь сами, что с нами удобно и выгодно!</p>
+  llm_store_brief: ""
   defaults:
     listing_type: Package
     contact_person: Владислав
-    phone: "79273181543"
-    address: "Республика Башкортостан, Уфа, улица Менделеева, 21"
+    phone: '79273181543'
+    address: Республика Башкортостан, Уфа, улица Менделеева, 21
     contact_method: По телефону и в сообщениях
     category: Запчасти и аксессуары
     goods_type: Шины, диски и колёса
@@ -59,5 +152,28 @@ autoload:
     condition: Новое
     run_flat: Нет
     audience: Частные лица и бизнес
-    company: Шинный Центр
+    company: Шинный Центр №1
     email: md@shinaufa.ru
+
+# --- Не используется в run_daily.bat (оставлено для совместимости) ---
+scrape:
+  search_url: ""
+  max_pages: 0
+  page_delay_sec: 7
+  browser_profile_dir: .browser_profile
+  headless: true
+own_seller_names:
+- Шинный Центр №1
+nomenclature_api:
+  base_url: http://192.168.1.75/
+  batch_size: 40
+  pause_sec: 0.2
+  timeout_sec: 90
+fourtochki:
+  catalog_xml: C:/Users/Ruslan/Downloads/MarkaModelNote.xml
+  catalog_json: data/4tochki_model_urls.json
+  descriptions_json: data/4tochki_descriptions.json
+  cache_dir: data/4tochki_html_cache
+  fetch_pause_sec: 1.0
+  timeout_sec: 60
+  dummy_size: ' 205/55 R16 91V'

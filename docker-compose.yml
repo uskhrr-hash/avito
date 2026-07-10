@@ -1,0 +1,25 @@
+# Локальная PostgreSQL только для описаний Avito (отдельно от ERP alpha).
+# Запуск: docker compose up -d
+# Остановка: docker compose down
+# Данные сохраняются в volume avito_pg_data.
+
+services:
+  avito-pg:
+    image: postgres:16-alpine
+    container_name: avito-descriptions-pg
+    environment:
+      POSTGRES_DB: avito
+      POSTGRES_USER: avito
+      POSTGRES_PASSWORD: avito
+    ports:
+      - "5433:5432"
+    volumes:
+      - avito_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U avito -d avito"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  avito_pg_data:

@@ -1,13 +1,64 @@
 __pycache__/
+
 *.py[cod]
+
 .pytest_cache/
+
 .browser_profile/
+
+.venv/
+
+venv/
+
 logs/*.log
+
 _probe*
+_probe.png
+.browser_profile/
+
+
 
 # выходные данные (генерируются скриптами)
+
 output/*
+
 !output/.gitkeep
 
+
+
 # временные файлы Excel
+
 ~$*
+
+
+
+# локальные секреты и настройки сервера (не в Git!)
+
+secrets.local.yaml
+
+config.local.yaml
+
+input/google_service_account.json
+
+
+
+# данные, которые генерируются или тяжёлые
+
+input/goods.xlsx
+
+input/autoload_working.xlsx
+
+input/avito_ids.csv
+
+model_descriptions.yaml
+
+
+
+# кэш и БД (БД один раз копируется на сервер отдельно)
+
+data/avito_descriptions.db
+
+data/4tochki_html_cache/
+
+data/4tochki_descriptions.json
+

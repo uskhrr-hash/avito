@@ -7,8 +7,14 @@ from pathlib import Path
 import pandas as pd
 
 from avito.config import CompareSettings
+from avito.stock_sources import GOODS_COLUMN_COUNT, is_legacy_goods_format
 from avito.own import is_own_listing
-from avito.pricing import PriceRecommendation, recommend_price
+from avito.pricing import (
+    PriceRecommendation,
+    fixed_price_recommendation,
+    recommend_price,
+    round_price_to_tens,
+)
 
 _USABLE_CONFIDENCE = frozenset({"exact", "inferred"})
 
@@ -19,6 +25,7 @@ class StockRow:
     nomenclature: str
     incoming: float
     quantity: str
+    avito_price: float | None = None
 
 
 def _parse_incoming(value) -> float | None:
@@ -34,6 +41,15 @@ def _parse_incoming(value) -> float | None:
         return None
 
 
+def _parse_optional_avito_price(value) -> float | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    s = str(value).strip().lower()
+    if not s or s in ("nan", "google", "db"):
+        return None
+    return _parse_incoming(value)
+
+
 def _read_stock_dataframe(path: Path, cfg: CompareSettings) -> pd.DataFrame:
     suffix = path.suffix.lower()
     if cfg.stock_has_header:
@@ -47,9 +63,16 @@ def _read_stock_dataframe(path: Path, cfg: CompareSettings) -> pd.DataFrame:
 
 def load_stock(path: Path, cfg: CompareSettings) -> list[StockRow]:
     if not path.exists():
-        raise FileNotFoundError(f"Файл остатков не найден: {path}")
+        raise FileNotFoundError(
+            f"Файл остатков не найден: {path}. Запустите: python build_stock.py"
+        )
 
     df = _read_stock_dataframe(path, cfg)
+    if not cfg.stock_has_header and is_legacy_goods_format(df):
+        raise ValueError(
+            f"Устаревший {path.name} ({len(df.columns)} колонок, нужно {GOODS_COLUMN_COUNT}). "
+            "Остатки только из Google и БД: python build_stock.py"
+        )
     rows: list[StockRow] = []
 
     if cfg.stock_has_header:
@@ -94,6 +117,7 @@ def load_stock(path: Path, cfg: CompareSettings) -> list[StockRow]:
     i_nom = idx.get("nomenclature", 1)
     i_qty = idx.get("quantity", 2)
     i_price = idx.get("price", 3)
+    i_avito = idx.get("avito_price")
 
     for _, r in df.iterrows():
         nom = str(r.iloc[i_nom] if i_nom < len(r) else "").strip()
@@ -106,12 +130,18 @@ def load_stock(path: Path, cfg: CompareSettings) -> list[StockRow]:
         qty = str(r.iloc[i_qty] if i_qty < len(r) else "").strip()
         if qty.lower() == "nan":
             qty = ""
+        avito_price = None
+        if i_avito is not None:
+            avito_price = _parse_optional_avito_price(
+                r.iloc[i_avito] if i_avito < len(r) else None
+            )
         rows.append(
             StockRow(
                 article=_clean_article(article),
                 nomenclature=nom,
                 incoming=incoming,
                 quantity=qty,
+                avito_price=avito_price,
             )
         )
     return rows
@@ -154,6 +184,7 @@ def _resolve_column(
 
 def load_avito_dump(path: Path, own_names: list[str]) -> pd.DataFrame:
     df = pd.read_csv(path, encoding="utf-8-sig")
+    df = _apply_match_keys(df)
     if "is_own" not in df.columns:
         owns = []
         matches = []
@@ -171,11 +202,116 @@ def load_avito_dump(path: Path, own_names: list[str]) -> pd.DataFrame:
     return df
 
 
+def _apply_match_keys(df: pd.DataFrame) -> pd.DataFrame:
+    """Ключ сопоставления с goods: name_canonical, если словарь распознал title."""
+    if "name_canonical" not in df.columns:
+        df["match_key"] = df["title"].astype(str).str.strip()
+        return df
+
+    df["match_key"] = ""
+    if "dict_recognized" in df.columns:
+        ok = df["dict_recognized"] == True  # noqa: E712
+        df.loc[ok, "match_key"] = (
+            df.loc[ok, "name_canonical"].astype(str).str.strip()
+        )
+    else:
+        canon = df["name_canonical"].astype(str).str.strip()
+        df["match_key"] = canon.where(~canon.isin(("", "nan", "None")), "")
+    return df
+
+
+def diagnose_unmatched_stock(nom: str, df: pd.DataFrame, *, exclude_needs_review: bool) -> str:
+    """Почему номенклатура из goods не получила avito_min."""
+    nom = nom.strip()
+    if "name_canonical" not in df.columns:
+        return "нет нормализованного дампа — запустите normalize_avito.py"
+
+    sub = df[df["name_canonical"].astype(str).str.strip() == nom]
+    if not sub.empty:
+        competitors = sub[sub["is_own"] == False]  # noqa: E712
+        if competitors.empty:
+            return "в дампе только свои объявления"
+        priced = competitors[competitors["price_per_tire"].notna()]
+        if priced.empty:
+            return "есть объявления, нет цены за штуку"
+        if exclude_needs_review and "price_confidence" in priced.columns:
+            usable = priced[priced["price_confidence"].isin(_USABLE_CONFIDENCE)]
+            if usable.empty:
+                return "есть объявления, цена только needs_review"
+        return "есть в дампе, min не рассчитан (проверьте фильтры)"
+
+    if "dict_recognized" in df.columns:
+        unk = df[df["dict_recognized"] == False]  # noqa: E712
+        if not unk.empty and nom:
+            token = nom.split()[0]
+            hits = unk[
+                unk["title"].astype(str).str.contains(token, case=False, na=False)
+            ]
+            if not hits.empty:
+                return (
+                    f"нет name={nom!r} в дампе; "
+                    f"похожие title без словаря: {len(hits)}"
+                )
+
+    return "нет в дампе Avito (по name_canonical)"
+
+
+def stock_avito_match_rows(
+    stock: list[StockRow],
+    avito_df: pd.DataFrame,
+    avito_mins: dict[str, float],
+    *,
+    exclude_needs_review: bool,
+) -> tuple[list[dict], list[dict]]:
+    """Отчёт сопоставления goods.номенклатура ↔ name_canonical и проблемы."""
+    details: list[dict] = []
+    problems: list[dict] = []
+
+    for row in stock:
+        nom = row.nomenclature
+        avito_min = avito_mins.get(nom)
+        matched = avito_min is not None
+
+        sub = pd.DataFrame()
+        if "name_canonical" in avito_df.columns:
+            sub = avito_df[
+                avito_df["name_canonical"].astype(str).str.strip() == nom
+            ]
+
+        reason = ""
+        if not matched:
+            reason = diagnose_unmatched_stock(
+                nom, avito_df, exclude_needs_review=exclude_needs_review
+            )
+            problems.append({"номенклатура": nom, "проблема": reason})
+
+        n_total = len(sub)
+        n_own = int(sub["is_own"].sum()) if n_total and "is_own" in sub.columns else 0
+        n_competitor = n_total - n_own if n_total else 0
+
+        details.append(
+            {
+                "номенклатура": nom,
+                "артикул": row.article,
+                "совпадение": "да" if matched else "нет",
+                "avito_min": avito_min if matched else "",
+                "объявлений_с_таким_name": n_total,
+                "конкурентов": n_competitor,
+                "своих": n_own,
+                "причина_если_нет": reason,
+            }
+        )
+
+    return details, problems
+
+
 def avito_min_by_title(df: pd.DataFrame, *, exclude_needs_review: bool) -> dict[str, float]:
-    """Минимальная цена конкурентов: ключ = title.strip() (1:1)."""
+    """Минимальная цена конкурентов: ключ = match_key (name_canonical из словаря)."""
     work = df.copy()
-    work["title_key"] = work["title"].astype(str).str.strip()
-    work = work[work["title_key"] != ""]
+    if "match_key" not in work.columns:
+        work["match_key"] = work["title"].astype(str).str.strip()
+    work["title_key"] = work["match_key"].astype(str).str.strip()
+    work = work[~work["title_key"].isin(("", "nan", "None"))]
     work = work[work["is_own"] == False]  # noqa: E712
     if exclude_needs_review:
         work = work[work["price_confidence"].isin(_USABLE_CONFIDENCE)]
@@ -202,16 +338,25 @@ def build_posting_rows(
         key = row.nomenclature  # 1:1, только strip при загрузке
         seen_nom[key] = seen_nom.get(key, 0) + 1
 
+        # остатки в нашем формате; avito_min по name_canonical после normalize_avito.py
         avito_min = avito_mins.get(key)
-        rec = recommend_price(
-            row.incoming,
-            avito_min,
-            seed=key,
-            date_key=date_key,
-            no_avito_multiplier=cfg.no_avito_multiplier,
-            floor_multiplier=cfg.floor_multiplier,
-            discounts=cfg.avito_discounts,
-        )
+        if row.avito_price is not None:
+            rec = fixed_price_recommendation(
+                row.avito_price,
+                row.incoming,
+                avito_min,
+                floor_multiplier=cfg.floor_multiplier,
+            )
+        else:
+            rec = recommend_price(
+                row.incoming,
+                avito_min,
+                seed=key,
+                date_key=date_key,
+                no_avito_multiplier=cfg.no_avito_multiplier,
+                floor_multiplier=cfg.floor_multiplier,
+                discounts=cfg.avito_discounts,
+            )
 
         posting.append(_posting_record(row, rec, avito_min, duplicate=(seen_nom[key] > 1)))
 
@@ -225,6 +370,20 @@ def build_posting_rows(
             )
 
     return posting, problems, []
+
+
+def stock_only_overview_rows(stock: list[StockRow]) -> list[dict]:
+    """Лист «остатки» для режима без парсера Avito."""
+    return [
+        {
+            "артикул": row.article,
+            "номенклатура": row.nomenclature,
+            "количество": row.quantity,
+            "входящая": row.incoming,
+            "цена_avito_фикс": row.avito_price if row.avito_price is not None else "",
+        }
+        for row in stock
+    ]
 
 
 def _posting_record(
@@ -242,10 +401,11 @@ def _posting_record(
         "входящая": row.incoming,
         "есть_на_avito": on_avito,
         "avito_min": avito_min if on_avito else "",
+        "цена_avito_фикс": row.avito_price if row.avito_price is not None else "",
         "recommended_price": rec.recommended_price,
         "price_rule": rec.price_rule,
         "discount_pct": rec.discount_pct if rec.discount_pct is not None else "",
-        "floor_входящая_x1.1": int(round(rec.floor_price)),
+        "floor_входящая_x1.1": round_price_to_tens(rec.floor_price),
         "дубликат_остаток": duplicate,
     }
 

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from avito.compare import load_stock
 from avito.config import load_config
-from avito.photos import PhotoNamingSettings, human_photo_hint, photo_filenames
+from avito.photos import article_photo_filenames, human_photo_hint
 
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("prepare_photos")
@@ -38,17 +38,19 @@ def _photo_cfg(app) -> PhotoNamingSettings:
     )
 
 
-def build_html(rows: list[dict], cfg: PhotoNamingSettings, stamp: str) -> str:
+def build_html(rows: list[dict], *, inbox_subdir: str, store_prefixes: list[str], stamp: str) -> str:
+    store_dirs = ", ".join(f"<b>{html.escape(p)}</b>" for p in store_prefixes) or "—"
     layout_hint = (
-        "Все файлы кладите в одну папку <b>Авито</b> на Диске — без вложенных папок."
-        if cfg.photo_layout == "flat"
-        else "Для каждого артикула создайте папку внутри <b>Авито</b>."
+        "Менеджеры: <b>Яндекс.Диск</b> → "
+        f"<b>Авито/{html.escape(inbox_subdir)}/</b> + папка магазина ({store_dirs}).<br>"
+        "Пример: положить <code>124889.jpg</code> в папку <code>md</code> → "
+        "объявление с контактами магазина <b>md</b>."
     )
     cards = []
     for r in rows:
         art = html.escape(r["article"])
         nom = html.escape(r["nomenclature"])
-        names = html.escape(human_photo_hint(r["article"], cfg))
+        names = html.escape(human_photo_hint(r["article"]))
         cards.append(
             f"""
             <article class="card" data-search="{art} {nom}">
@@ -135,7 +137,6 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     app = load_config(args.config)
-    photo_cfg = _photo_cfg(app)
     stamp = args.date or date.today().isoformat()
 
     stock_path = args.stock or (ROOT / app.compare.stock_file)
@@ -152,7 +153,7 @@ def main() -> int:
     for item in stock:
         if not item.article:
             continue
-        files = photo_filenames(item.article, photo_cfg)
+        files = article_photo_filenames(item.article)
         rows.append(
             {
                 "article": item.article,
@@ -166,15 +167,24 @@ def main() -> int:
     html_path = out_dir / f"photo_upload_{stamp}.html"
     txt_path = out_dir / f"photo_names_{stamp}.txt"
 
-    html_path.write_text(build_html(rows, photo_cfg, stamp), encoding="utf-8")
+    html_path.write_text(
+        build_html(
+            rows,
+            inbox_subdir=app.autoload.manager_inbox_subdir,
+            store_prefixes=list(app.stores.prefixes),
+            stamp=stamp,
+        ),
+        encoding="utf-8",
+    )
 
     lines = [
-        "# Загрузите в папку Авито на Яндекс.Диске",
+        "# Загрузите в папку Авито/входящие на Яндекс.Диске",
         f"# {DISK_URL}",
+        "# Имя файла: АРТИКУЛ.jpg или АРТИКУЛ-2.jpg",
         "",
     ]
     for r in rows:
-        names = photo_filenames(r["article"], photo_cfg)
+        names = article_photo_filenames(r["article"])
         lines.append(f"{r['article']}\t{names[0]}\t{r['nomenclature'][:60]}")
     txt_path.write_text("\n".join(lines), encoding="utf-8")
 

@@ -8,12 +8,14 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import pandas as pd
+
 from avito.browser import (
     AvitoBlockedError,
     create_context,
     open_search,
     pause_before_close,
-    wait_between_pages,
+    sleep_scrape_pause,
 )
 from avito.config import load_config
 from avito.pagination import (
@@ -22,7 +24,7 @@ from avito.pagination import (
     pagination_hint,
     should_continue_pagination,
 )
-from avito.parser import extract_page_items, mark_own_listings, write_csv, write_jsonl
+from avito.parser import Listing, extract_page_items, mark_own_listings, write_csv, write_jsonl
 
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("avito_scrape")
@@ -40,13 +42,25 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--headed",
         action="store_true",
-        help="Показать браузер; ждать капчу до 5 мин (не закрывать сразу)",
+        help="Показать браузер; ждать капчу до 5 мин на каждой странице",
     )
     p.add_argument(
         "--max-pages",
         type=int,
         default=None,
         help="Лимит страниц (перекрывает config)",
+    )
+    p.add_argument(
+        "--start-page",
+        type=int,
+        default=1,
+        help="Начать с страницы N (продолжение после блокировки)",
+    )
+    p.add_argument(
+        "--page-delay",
+        type=float,
+        default=None,
+        help="Базовая пауза между страницами, сек (перекрывает config)",
     )
     p.add_argument(
         "-o",
@@ -69,6 +83,71 @@ def _dedupe_batch(batch, seen_ids: set[str]) -> list:
     return unique
 
 
+def _opt_int(value) -> int | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _opt_float(value) -> float | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _load_listings_csv(path: Path) -> tuple[list[Listing], set[str]]:
+    if not path.is_file():
+        return [], set()
+    df = pd.read_csv(path, encoding="utf-8-sig")
+    items: list[Listing] = []
+    seen: set[str] = set()
+    for _, row in df.iterrows():
+        badges_raw = row.get("badges", "")
+        badges = (
+            [b for b in str(badges_raw).split("|") if b]
+            if pd.notna(badges_raw) and str(badges_raw).strip()
+            else []
+        )
+        item = Listing(
+            avito_id=str(row.get("avito_id", "") or ""),
+            title=str(row.get("title", "") or ""),
+            url=str(row.get("url", "") or ""),
+            price_raw=str(row.get("price_raw", "") or ""),
+            price_rub=_opt_int(row.get("price_rub")),
+            price_unit_count=_opt_int(row.get("price_unit_count")),
+            price_per_tire=_opt_float(row.get("price_per_tire")),
+            price_confidence=str(row.get("price_confidence", "") or ""),
+            price_note=str(row.get("price_note", "") or ""),
+            location=str(row.get("location", "") or ""),
+            date_text=str(row.get("date_text", "") or ""),
+            seller=str(row.get("seller", "") or ""),
+            badges=badges,
+            description_snippet=str(row.get("description_snippet", "") or ""),
+            is_own=str(row.get("is_own", "")).strip().lower() in ("true", "1", "yes", "да"),
+            own_match=str(row.get("own_match", "") or ""),
+            page_num=_opt_int(row.get("page_num")) or 1,
+            scraped_at=str(row.get("scraped_at", "") or ""),
+        )
+        items.append(item)
+        key = item.avito_id or item.url
+        if key:
+            seen.add(key)
+    return items, seen
+
+
+def _save_dump(out_csv: Path, out_jsonl: Path, all_items) -> None:
+    write_csv(out_csv, all_items)
+    write_jsonl(out_jsonl, all_items)
+    review = sum(1 for x in all_items if x.price_confidence == "needs_review")
+    LOG.info("  needs_review: %s", review)
+
+
 def main() -> int:
     args = parse_args()
     logging.basicConfig(
@@ -80,6 +159,10 @@ def main() -> int:
     settings = app.scrape
     own_names = app.compare.own_seller_names
     max_pages = args.max_pages if args.max_pages is not None else settings.max_pages
+    page_delay = (
+        args.page_delay if args.page_delay is not None else settings.page_delay_sec
+    )
+    start_page = max(1, args.start_page)
     headed = args.headed
     headless = not headed and settings.headless
     profile_dir = (ROOT / settings.browser_profile_dir).resolve()
@@ -88,9 +171,21 @@ def main() -> int:
     out_csv = args.output_dir / f"avito_tires_{stamp}.csv"
     out_jsonl = args.output_dir / f"avito_tires_{stamp}.jsonl"
 
-    all_items = []
+    all_items: list[Listing] = []
     seen_ids: set[str] = set()
-    pages_done = 0
+    if start_page > 1:
+        if not out_csv.is_file():
+            LOG.error("Нет дампа за сегодня для продолжения: %s", out_csv)
+            return 1
+        all_items, seen_ids = _load_listings_csv(out_csv)
+        LOG.info(
+            "Продолжение: стр. %s, уже в дампе: %s записей → %s",
+            start_page,
+            len(all_items),
+            out_csv,
+        )
+
+    pages_done = start_page - 1
     playwright = None
     context = None
     exit_code = 0
@@ -99,12 +194,16 @@ def main() -> int:
         playwright, context = create_context(profile_dir, headless=headless)
         page = context.pages[0] if context.pages else context.new_page()
 
-        page_num = 1
+        page_num = start_page
         while True:
             url = page_url(settings.search_url, page_num)
             LOG.info("Страница %s: %s", page_num, url[:120])
-            interactive = headed and page_num == 1
-            open_search(page, url, interactive=interactive)
+            if headed and page_num > 1:
+                print(
+                    f"\n>>> Страница {page_num}: если капча — решите в окне браузера.\n",
+                    flush=True,
+                )
+            open_search(page, url, interactive=headed)
             batch = extract_page_items(page, page_num)
             mark_own_listings(batch, own_names)
             unique = _dedupe_batch(batch, seen_ids)
@@ -139,7 +238,17 @@ def main() -> int:
                 break
 
             page_num += 1
-            wait_between_pages(settings.page_delay_sec)
+            pause, note = sleep_scrape_pause(
+                page_num,
+                base_sec=page_delay,
+                jitter_sec=settings.page_delay_jitter_sec,
+                step_sec=settings.page_delay_step_sec,
+                step_from_page=settings.page_delay_step_from,
+                rest_every=settings.page_rest_every,
+                rest_sec=settings.page_rest_sec,
+                rest_jitter_sec=settings.page_rest_jitter_sec,
+            )
+            LOG.info("  пауза %.1f с перед стр. %s%s", pause, page_num, note)
 
     except AvitoBlockedError as exc:
         LOG.error("%s", exc)
@@ -154,19 +263,27 @@ def main() -> int:
         if playwright:
             playwright.stop()
 
-    if exit_code != 0:
-        return exit_code
-
     if not all_items:
         LOG.warning("Ничего не собрано — проверьте URL и доступ к Авито")
-        return 1
+        return 1 if exit_code == 0 else exit_code
 
-    write_csv(out_csv, all_items)
-    write_jsonl(out_jsonl, all_items)
+    _save_dump(out_csv, out_jsonl, all_items)
 
-    review = sum(1 for x in all_items if x.price_confidence == "needs_review")
+    if exit_code != 0:
+        LOG.warning(
+            "Частичный дамп: %s записей (до стр. %s) → %s",
+            len(all_items),
+            pages_done,
+            out_csv,
+        )
+        if exit_code == 2:
+            LOG.info(
+                "Продолжить после капчи: python scrape.py --headed --start-page %s",
+                pages_done + 1,
+            )
+        return exit_code
+
     LOG.info("Готово: %s записей (%s стр.) → %s", len(all_items), pages_done, out_csv)
-    LOG.info("  needs_review: %s", review)
     return 0
 
 

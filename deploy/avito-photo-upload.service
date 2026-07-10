@@ -1,0 +1,15 @@
+[Unit]
+Description=Avito photo upload web app
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/avito_tires_parser
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/avito_tires_parser/.venv/bin/python run_photo_upload.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

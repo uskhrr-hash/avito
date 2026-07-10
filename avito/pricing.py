@@ -61,5 +61,27 @@ def recommend_price(
     )
 
 
+def round_price_to_tens(value: float) -> int:
+    """Округление цены выкладки до десятков рублей."""
+    return int(round(value / 10) * 10)
+
+
 def _round_price(value: float) -> int:
-    return int(round(value))
+    return round_price_to_tens(value)
+
+
+def fixed_price_recommendation(
+    fixed_price: float,
+    incoming: float,
+    avito_min: float | None,
+    *,
+    floor_multiplier: float = 1.10,
+) -> PriceRecommendation:
+    """Фиксированная цена из Google (столбец G); пустая ячейка сюда не попадает."""
+    return PriceRecommendation(
+        recommended_price=round_price_to_tens(fixed_price),
+        price_rule="fixed_google",
+        avito_min=avito_min,
+        floor_price=incoming * floor_multiplier,
+        discount_pct=None,
+    )

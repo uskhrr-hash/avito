@@ -1,0 +1,15 @@
+# Скопируйте на VPS в корень проекта как config.local.yaml
+# (этот файл в Git не попадает — только на сервере)
+#
+#   cp deploy/config.local.vps.example.yaml config.local.yaml
+
+autoload:
+  photos_local_dir: /opt/avito_tires_photos
+  image_mode: server_https
+  photos_public_base_url: https://avito.shinaufa.ru/photos
+
+avito_publish:
+  enabled: true
+
+photo_upload:
+  enabled: true

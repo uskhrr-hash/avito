@@ -1,0 +1,27 @@
+# Не копировать на VPS (rsync --exclude-from)
+__pycache__
+*.pyc
+.pytest_cache
+.browser_profile
+.venv
+venv
+.git
+_probe*
+
+# Одноразовый кэш 4tochki — тысячи HTML, уже импортировано в БД
+data/4tochki_html_cache
+data/4tochki_descriptions.json
+
+# Генерируется на сервере
+output
+logs
+input/goods.xlsx
+
+# Секреты — отдельным scp
+secrets.local.yaml
+
+# Legacy / dev
+model_descriptions.yaml
+tests
+*.md
+~$*

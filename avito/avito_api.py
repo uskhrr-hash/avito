@@ -13,6 +13,11 @@ LOG = logging.getLogger(__name__)
 DEFAULT_API_BASE = "https://api.avito.ru"
 DEFAULT_TOKEN_URL = f"{DEFAULT_API_BASE}/token"
 
+# Расписание по умолчанию: каждый день в 04:00 МСК, до 1000 объявлений за слот.
+DEFAULT_AUTOLOAD_SCHEDULE: list[dict[str, Any]] = [
+    {"rate": 1000, "weekdays": [0, 1, 2, 3, 4, 5, 6], "time_slots": [4]},
+]
+
 
 @dataclass(frozen=True)
 class AvitoApiConfig:
@@ -137,15 +142,23 @@ def update_autoload_profile(
     *,
     feed_name: str,
     feed_url: str,
-    report_email: str = "",
+    report_email: str,
+    schedule: list[dict[str, Any]] | None = None,
     autoload_enabled: bool = True,
+    agreement: bool | None = None,
 ) -> dict[str, Any]:
+    email = str(report_email or "").strip()
+    if not email:
+        raise ValueError("report_email обязателен для POST /autoload/v2/profile")
+    sched = list(schedule or DEFAULT_AUTOLOAD_SCHEDULE)
     body: dict[str, Any] = {
         "autoload_enabled": autoload_enabled,
         "feeds_data": [{"feed_name": feed_name, "feed_url": feed_url}],
+        "report_email": email,
+        "schedule": sched,
     }
-    if report_email:
-        body["report_email"] = report_email
+    if agreement is not None:
+        body["agreement"] = agreement
     data = client.request("POST", "/autoload/v2/profile", json_body=body)
     return data if isinstance(data, dict) else {}
 

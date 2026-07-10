@@ -38,6 +38,13 @@ avito_publish:
   enabled: false
   feed_name: shinaufa
   feed_public_url: https://avito.shinaufa.ru/feeds/autoload.xlsx
+  # Почта для отчётов автозагрузки (обязательна для API profile)
+  report_email: ""
+  # Расписание (опционально; иначе ежедневно 04:00 МСК)
+  # schedule:
+  #   - rate: 1000
+  #     weekdays: [0, 1, 2, 3, 4, 5, 6]
+  #     time_slots: [4]
   # На VPS: каталог, откуда nginx отдаёт /feeds/
   feed_local_dir: /var/www/avito-feed/feeds
   auto_set_profile: true

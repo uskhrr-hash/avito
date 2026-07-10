@@ -1,7 +1,14 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-from avito.avito_api import AvitoApiClient, AvitoApiConfig, fetch_token, load_avito_api_config
+from avito.avito_api import (
+    AvitoApiClient,
+    AvitoApiConfig,
+    DEFAULT_AUTOLOAD_SCHEDULE,
+    fetch_token,
+    load_avito_api_config,
+    update_autoload_profile,
+)
 
 
 class TestAvitoApi(unittest.TestCase):
@@ -35,6 +42,35 @@ class TestAvitoApi(unittest.TestCase):
         mock_req.return_value = MagicMock(status_code=200, content=b'{"ok":true}', json=lambda: {"ok": True})
         client = AvitoApiClient(AvitoApiConfig(client_id="a", client_secret="b"))
         self.assertEqual(client.request("GET", "/autoload/v2/profile"), {"ok": True})
+
+    @patch("avito.avito_api.fetch_token")
+    @patch("avito.avito_api.requests.request")
+    def test_update_profile_includes_schedule(self, mock_req, mock_token):
+        mock_token.return_value = __import__(
+            "avito.avito_api", fromlist=["AvitoToken"]
+        ).AvitoToken(access_token="t", expires_at=1e12)
+        mock_req.return_value = MagicMock(status_code=200, content=b"{}", json=lambda: {})
+        client = AvitoApiClient(AvitoApiConfig(client_id="a", client_secret="b"))
+        update_autoload_profile(
+            client,
+            feed_name="main",
+            feed_url="https://example.com/feed.xlsx",
+            report_email="test@example.com",
+        )
+        body = mock_req.call_args.kwargs["json"]
+        self.assertEqual(body["report_email"], "test@example.com")
+        self.assertEqual(body["schedule"], DEFAULT_AUTOLOAD_SCHEDULE)
+        self.assertEqual(body["feeds_data"][0]["feed_url"], "https://example.com/feed.xlsx")
+
+    def test_update_profile_requires_email(self):
+        client = AvitoApiClient(AvitoApiConfig(client_id="a", client_secret="b"))
+        with self.assertRaises(ValueError):
+            update_autoload_profile(
+                client,
+                feed_name="main",
+                feed_url="https://example.com/feed.xlsx",
+                report_email="",
+            )
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ if str(ROOT) not in sys.path:
 
 from avito.avito_api import (
     AvitoApiClient,
+    DEFAULT_AUTOLOAD_SCHEDULE,
     get_autoload_profile,
     get_last_successful_upload,
     load_avito_api_config,
@@ -45,6 +46,17 @@ def parse_args() -> argparse.Namespace:
 def _load_publish_cfg(config_path: Path) -> dict:
     raw = load_merged_yaml(config_path)
     return dict(raw.get("avito_publish") or {})
+
+
+def _resolve_report_email(profile: dict, pub: dict) -> str:
+    return str(profile.get("report_email") or pub.get("report_email") or "").strip()
+
+
+def _resolve_schedule(profile: dict, pub: dict) -> list[dict]:
+    sched = profile.get("schedule") or pub.get("schedule")
+    if sched:
+        return list(sched)
+    return list(DEFAULT_AUTOLOAD_SCHEDULE)
 
 
 def main() -> int:
@@ -89,20 +101,38 @@ def main() -> int:
     client = AvitoApiClient(load_avito_api_config(load_secrets(secrets_path)))
 
     profile = get_autoload_profile(client)
-    report_email = str(profile.get("report_email", "") or "").strip()
+    report_email = _resolve_report_email(profile, pub)
+    schedule = _resolve_schedule(profile, pub)
     feeds = profile.get("feeds_data") or []
     need_profile = not feeds or not any(
         str(f.get("feed_url", "")).strip() == feed_url for f in feeds if isinstance(f, dict)
     )
 
     if need_profile and not args.no_profile and pub.get("auto_set_profile", True):
-        LOG.info("Обновляем профиль автозагрузки → %s", feed_url)
-        update_autoload_profile(
-            client,
-            feed_name=feed_name,
-            feed_url=feed_url,
-            report_email=report_email,
-        )
+        if not report_email:
+            LOG.error(
+                "Нет report_email — добавьте в config.local.yaml:\n"
+                "  avito_publish:\n"
+                "    report_email: ваш@email.ru"
+            )
+            LOG.warning("Пропускаем обновление профиля (фид на сервере уже скопирован)")
+        else:
+            LOG.info("Обновляем профиль автозагрузки → %s", feed_url)
+            try:
+                update_autoload_profile(
+                    client,
+                    feed_name=feed_name,
+                    feed_url=feed_url,
+                    report_email=report_email,
+                    schedule=schedule,
+                )
+            except (RuntimeError, ValueError) as exc:
+                LOG.error("Профиль не обновлён: %s", exc)
+                LOG.warning(
+                    "Фид уже на %s — можно задать URL вручную в ЛК Авито "
+                    "или исправить report_email/schedule",
+                    feed_url,
+                )
     elif need_profile:
         LOG.warning("feeds_data пустой — включите auto_set_profile или настройте URL в ЛК")
 

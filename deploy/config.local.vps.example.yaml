@@ -10,6 +10,7 @@ autoload:
 
 avito_publish:
   enabled: true
+  report_email: md@shinaufa.ru
 
 photo_upload:
   enabled: true

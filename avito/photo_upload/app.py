@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from avito.photo_upload.guide import render_guide_html
+from avito.photo_upload.overlays import EXAMPLE_FILES, overlay_svg_for_shot, shot_label
 from avito.photo_upload.service import (
     load_no_photos_queue_info,
     lookup_stock,
@@ -60,6 +61,21 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
     )
     app.state.runtime = runtime
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/api/shot-guide")
+    async def api_shot_guide(index: int = 1) -> JSONResponse:
+        idx = max(1, int(index))
+        meta = shot_label(idx)
+        return JSONResponse(
+            {
+                "index": idx,
+                "title": meta["title"],
+                "hint": meta["hint"],
+                "short": meta["short"],
+                "overlay_svg": overlay_svg_for_shot(idx, camera=True),
+                "example_url": EXAMPLE_FILES.get(idx, ""),
+            }
+        )
 
     @app.get("/guide", response_class=HTMLResponse)
     async def guide() -> HTMLResponse:
@@ -299,6 +315,7 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
   <base href="{base}">
   <title>Фото — {store.label}</title>
   <link rel="stylesheet" href="static/app.css">
+  <link rel="stylesheet" href="static/camera.css">
 </head>
 <body class="page-app">
   <header class="topbar">
@@ -328,9 +345,11 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
         <span id="pending-count" class="badge">0</span>
       </div>
       <div id="pending-list" class="pending-list"></div>
-      <label class="btn btn-camera file-btn">
-        <input id="camera" type="file" accept="image/*" capture="environment" hidden>
-        📷 Сфотографировать
+      <p id="next-shot-hint" class="shot-hint muted">Введите артикул — подскажем следующий кадр</p>
+      <button type="button" id="open-camera" class="btn btn-camera">📷 Сфотографировать</button>
+      <label class="btn btn-secondary file-btn camera-fallback-btn">
+        <input id="camera-fallback" type="file" accept="image/*" capture="environment" hidden>
+        Системная камера / галерея
       </label>
     </section>
 
@@ -358,6 +377,26 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
   </div>
 
   <div id="toast" class="toast"></div>
+
+  <div id="camera-modal" class="camera-modal hidden" aria-hidden="true">
+    <div class="camera-top">
+      <div>
+        <div id="camera-title" class="camera-title">Фото 1</div>
+        <div id="camera-hint" class="camera-sub">Стопка шин</div>
+      </div>
+      <button type="button" id="camera-close" class="btn btn-ghost" aria-label="Закрыть">✕</button>
+    </div>
+    <div class="camera-stage">
+      <video id="camera-video" autoplay playsinline muted></video>
+      <div id="camera-overlay" class="camera-overlay"></div>
+      <img id="camera-example" class="camera-example hidden" alt="">
+    </div>
+    <div class="camera-bottom">
+      <button type="button" id="camera-capture" class="btn btn-primary camera-shutter">Снять</button>
+      <a id="camera-example-link" class="camera-example-link" href="guide" target="_blank" rel="noopener">Эталон</a>
+    </div>
+  </div>
+
   <script>window.PHOTO_UPLOAD_SESSION = {store_json};</script>
   <script src="static/app.js"></script>
 </body>

@@ -11,6 +11,18 @@ DEFAULT_EXCLUDED_SUPPLIERS = frozenset(
         "Вектра Уфа",
         "Колобокс Нижний",
         "Колобокс Уфа",
+        "Шинсервис",
+        "Римэкс",
+    }
+)
+
+DEFAULT_ALLOWED_SUPPLIERS = frozenset(
+    {
+        "Сам МБ Уфа",
+        "Сам МБ Москва",
+        "Бринэкс",
+        "Пауэр Уфа",
+        "Шининвест",
     }
 )
 
@@ -44,6 +56,7 @@ class StockPriorityConfig:
     ufa_multiplier: float = 0.9
     moscow_multiplier: float = 0.9
     excluded_suppliers: frozenset[str] = DEFAULT_EXCLUDED_SUPPLIERS
+    allowed_suppliers: frozenset[str] = DEFAULT_ALLOWED_SUPPLIERS
 
 
 @dataclass(frozen=True)
@@ -54,6 +67,8 @@ class PriorityResult:
     quantity: str
     priority: str
     supplier: str
+    ushk_in_stock: bool = False
+    sam_mb_cash_price: bool = False
 
 
 def is_ushk_supplier(supplier: str, *, prefix: str = "УШК") -> bool:
@@ -62,6 +77,79 @@ def is_ushk_supplier(supplier: str, *, prefix: str = "УШК") -> bool:
 
 def is_excluded_supplier(supplier: str, excluded: Iterable[str]) -> bool:
     return str(supplier or "").strip() in set(excluded)
+
+
+def is_other_power_supplier(supplier: str, *, allowed: str = "Пауэр Уфа") -> bool:
+    """Пауэр Москва, Пауэр Екб и т.д. — не обрабатываем, только Пауэр Уфа."""
+    name = str(supplier or "").strip()
+    if not name.startswith("Пауэр"):
+        return False
+    return name != allowed
+
+
+def is_allowed_supplier(supplier: str, cfg: StockPriorityConfig) -> bool:
+    name = str(supplier or "").strip()
+    if not name:
+        return False
+    if is_excluded_supplier(name, cfg.excluded_suppliers):
+        return False
+    if is_other_power_supplier(name):
+        return False
+    if is_ushk_supplier(name, prefix=cfg.ushk_prefix):
+        return True
+    return name in cfg.allowed_suppliers
+
+
+def articles_with_ushk_stock(
+    lines: list[RegisterLine],
+    cfg: StockPriorityConfig,
+) -> frozenset[str]:
+    out: set[str] = set()
+    for line in lines:
+        if not is_allowed_supplier(line.supplier, cfg):
+            continue
+        if (
+            is_ushk_supplier(line.supplier, prefix=cfg.ushk_prefix)
+            and line.quantity >= cfg.min_quantity
+        ):
+            art = str(line.article).strip()
+            if art:
+                out.add(art)
+    return frozenset(out)
+
+
+def article_has_sam_mb_cash_stock(
+    article: str,
+    lines: list[RegisterLine],
+    cfg: StockPriorityConfig,
+) -> bool:
+    """Сам МБ Уфа ≥ min_quantity (4) или Сам МБ Москва ≥ moscow_min_quantity (40)."""
+    art = str(article).strip()
+    if not art:
+        return False
+    ufa_min = max(1, int(cfg.min_quantity))
+    moscow_min = max(1, int(cfg.moscow_min_quantity))
+    for line in lines:
+        if str(line.article).strip() != art:
+            continue
+        if line.supplier == cfg.supplier_ufa and line.quantity >= ufa_min:
+            return True
+        if line.supplier == cfg.supplier_moscow and line.quantity >= moscow_min:
+            return True
+    return False
+
+
+def articles_with_sam_mb_cash_stock(
+    lines: list[RegisterLine],
+    cfg: StockPriorityConfig,
+) -> frozenset[str]:
+    out: set[str] = set()
+    for line in lines:
+        if article_has_sam_mb_cash_stock(line.article, lines, cfg):
+            art = str(line.article).strip()
+            if art:
+                out.add(art)
+    return frozenset(out)
 
 
 def _qty_str(value: float) -> str:
@@ -80,7 +168,7 @@ def resolve_register_article(
     active = [
         line
         for line in lines
-        if not is_excluded_supplier(line.supplier, cfg.excluded_suppliers)
+        if is_allowed_supplier(line.supplier, cfg)
     ]
     if not active:
         return None
@@ -91,6 +179,8 @@ def resolve_register_article(
         if is_ushk_supplier(line.supplier, prefix=cfg.ushk_prefix)
         and line.quantity >= cfg.min_quantity
     ]
+    ushk_in_stock = bool(ushk_ok)
+    sam_mb_cash_price = article_has_sam_mb_cash_stock(article, lines, cfg)
     ufa_ok = [
         line
         for line in active
@@ -117,6 +207,8 @@ def resolve_register_article(
             quantity=_qty_str(row.quantity),
             priority="p2",
             supplier=row.supplier,
+            ushk_in_stock=ushk_in_stock,
+            sam_mb_cash_price=sam_mb_cash_price,
         )
 
     if has_ufa:
@@ -128,6 +220,8 @@ def resolve_register_article(
             quantity=_qty_str(row.quantity),
             priority="p3",
             supplier=row.supplier,
+            ushk_in_stock=ushk_in_stock,
+            sam_mb_cash_price=sam_mb_cash_price,
         )
 
     if has_moscow and has_ushk:
@@ -139,6 +233,8 @@ def resolve_register_article(
             quantity=_qty_str(row.quantity),
             priority="p4",
             supplier=row.supplier,
+            ushk_in_stock=ushk_in_stock,
+            sam_mb_cash_price=sam_mb_cash_price,
         )
 
     if has_ushk:
@@ -150,6 +246,8 @@ def resolve_register_article(
             quantity=_qty_str(row.quantity),
             priority="p5",
             supplier=row.supplier,
+            ushk_in_stock=ushk_in_stock,
+            sam_mb_cash_price=sam_mb_cash_price,
         )
 
     if not eligible:
@@ -163,6 +261,8 @@ def resolve_register_article(
         quantity=_qty_str(row.quantity),
         priority="p6",
         supplier=row.supplier,
+        ushk_in_stock=ushk_in_stock,
+        sam_mb_cash_price=sam_mb_cash_price,
     )
 
 

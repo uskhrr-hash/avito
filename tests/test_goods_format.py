@@ -57,12 +57,14 @@ class TestGoodsFormat(unittest.TestCase):
                         price=4000,
                         source="google",
                         avito_price=5500,
+                        ushk_in_stock=True,
                     )
                 ],
             )
             rows = load_stock(p, _cfg())
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].avito_price, 5500)
+            self.assertTrue(rows[0].ushk_in_stock)
 
 
 if __name__ == "__main__":

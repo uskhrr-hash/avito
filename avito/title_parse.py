@@ -252,3 +252,17 @@ def parse_title_fields(title: str) -> dict[str, str]:
     }
 
 
+def build_multi_name_from_title(title: str) -> str:
+    """
+    MultiName для мультиобъявлений Авито — группировка по размеру.
+
+    Формат без спецсимволов: 19565R15 (ширина + профиль + R + диаметр).
+    """
+    fields = parse_title_fields(title)
+    width = str(fields.get("width", "") or "").strip()
+    profile = str(fields.get("profile", "") or "").strip()
+    diameter = str(fields.get("diameter", "") or "").strip()
+    if not (width and profile and diameter):
+        return ""
+    return f"{width}{profile}R{diameter}"
+

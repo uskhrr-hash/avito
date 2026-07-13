@@ -7,7 +7,13 @@ from pathlib import Path
 import pandas as pd
 
 from avito.config import CompareSettings
-from avito.stock_sources import GOODS_COLUMN_COUNT, is_legacy_goods_format
+from avito.stock_sources import (
+    GOODS_COLUMN_COUNT,
+    GOODS_SAM_MB_CASH_COLUMN_INDEX,
+    GOODS_USHK_COLUMN_INDEX,
+    is_legacy_goods_format,
+    _parse_ushk_cell,
+)
 from avito.own import is_own_listing
 from avito.pricing import (
     PriceRecommendation,
@@ -25,6 +31,8 @@ class StockRow:
     incoming: float
     quantity: str
     avito_price: float | None = None
+    ushk_in_stock: bool = False
+    sam_mb_cash_price: bool = False
 
 
 def _parse_incoming(value) -> float | None:
@@ -134,6 +142,12 @@ def load_stock(path: Path, cfg: CompareSettings) -> list[StockRow]:
             avito_price = _parse_optional_avito_price(
                 r.iloc[i_avito] if i_avito < len(r) else None
             )
+        ushk_in_stock = False
+        if len(r) > GOODS_USHK_COLUMN_INDEX:
+            ushk_in_stock = _parse_ushk_cell(r.iloc[GOODS_USHK_COLUMN_INDEX])
+        sam_mb_cash_price = False
+        if len(r) > GOODS_SAM_MB_CASH_COLUMN_INDEX:
+            sam_mb_cash_price = _parse_ushk_cell(r.iloc[GOODS_SAM_MB_CASH_COLUMN_INDEX])
         rows.append(
             StockRow(
                 article=_clean_article(article),
@@ -141,6 +155,8 @@ def load_stock(path: Path, cfg: CompareSettings) -> list[StockRow]:
                 incoming=incoming,
                 quantity=qty,
                 avito_price=avito_price,
+                ushk_in_stock=ushk_in_stock,
+                sam_mb_cash_price=sam_mb_cash_price,
             )
         )
     return rows
@@ -391,6 +407,8 @@ def _posting_record(
         "количество": row.quantity,
         "входящая": row.incoming,
         "есть_на_avito": on_avito,
+        "ушк_в_наличии": bool(row.ushk_in_stock),
+        "цена_за_наличный_расчет": bool(row.sam_mb_cash_price),
         "avito_min": avito_min if on_avito else "",
         "цена_avito_фикс": row.avito_price if row.avito_price is not None else "",
         "recommended_price": rec.recommended_price,

@@ -22,6 +22,10 @@ from avito.stock_priority import (
 
     StockPriorityConfig,
 
+    articles_with_ushk_stock,
+
+    articles_with_sam_mb_cash_stock,
+
     resolve_register_stock,
 
 )
@@ -43,6 +47,10 @@ class StockRow:
     source: str
 
     avito_price: float | None = None
+
+    ushk_in_stock: bool = False
+
+    sam_mb_cash_price: bool = False
 
 def load_secrets(path: Path) -> dict:
 
@@ -154,6 +162,8 @@ def _rows_from_df(df: pd.DataFrame, cols: dict[str, str], *, source: str) -> lis
 
                 avito_price=None,
 
+                sam_mb_cash_price=(source == "google"),
+
             )
 
         )
@@ -209,6 +219,8 @@ def _rows_from_df_by_index(
                 source=source,
 
                 avito_price=None,
+
+                sam_mb_cash_price=(source == "google"),
 
             )
 
@@ -316,9 +328,11 @@ def _priority_config(cfg: StockSourcesSettings) -> StockPriorityConfig:
 
         excluded_suppliers=frozenset(cfg.db_excluded_suppliers),
 
+        allowed_suppliers=frozenset(cfg.db_allowed_suppliers),
+
     )
 
-def fetch_db_rows(cfg: StockSourcesSettings, secrets: dict) -> list[StockRow]:
+def _load_register_lines(cfg: StockSourcesSettings, secrets: dict) -> list[RegisterLine]:
 
     d_cfg = secrets.get("db") or {}
 
@@ -394,6 +408,14 @@ def fetch_db_rows(cfg: StockSourcesSettings, secrets: dict) -> list[StockRow]:
 
         )
 
+    return lines
+
+
+def _rows_from_register_lines(
+    lines: list[RegisterLine],
+    cfg: StockSourcesSettings,
+) -> list[StockRow]:
+
     resolved = resolve_register_stock(lines, _priority_config(cfg))
 
     return [
@@ -412,11 +434,22 @@ def fetch_db_rows(cfg: StockSourcesSettings, secrets: dict) -> list[StockRow]:
 
             avito_price=None,
 
+            ushk_in_stock=item.ushk_in_stock,
+
+            sam_mb_cash_price=item.sam_mb_cash_price,
+
         )
 
         for item in resolved
 
     ]
+
+
+def fetch_db_rows(cfg: StockSourcesSettings, secrets: dict) -> list[StockRow]:
+
+    lines = _load_register_lines(cfg, secrets)
+
+    return _rows_from_register_lines(lines, cfg)
 
 def merge_rows(
 
@@ -424,11 +457,47 @@ def merge_rows(
 
     db_rows: list[StockRow],
 
+    *,
+
+    ushk_articles: frozenset[str] | None = None,
+
+    sam_mb_cash_articles: frozenset[str] | None = None,
+
 ) -> list[StockRow]:
 
     """Приоритет Google (П1): дубли артикулов из БД отбрасываются."""
 
-    by_article: dict[str, StockRow] = {r.article: r for r in google_rows}
+    ushk_set = ushk_articles or frozenset()
+
+    cash_set = sam_mb_cash_articles or frozenset()
+
+    by_article: dict[str, StockRow] = {}
+
+    for r in google_rows:
+
+        ushk = r.ushk_in_stock or r.article in ushk_set
+
+        cash = r.sam_mb_cash_price or r.article in cash_set or r.source == "google"
+
+        by_article[r.article] = StockRow(
+
+            article=r.article,
+
+            name=r.name,
+
+            quantity=r.quantity,
+
+            price=r.price,
+
+            source=r.source,
+
+            avito_price=r.avito_price,
+
+            ushk_in_stock=ushk,
+
+            sam_mb_cash_price=cash,
+
+        )
 
     for row in db_rows:
 
@@ -439,6 +508,20 @@ def merge_rows(
     return sorted(by_article.values(), key=lambda x: x.article)
 
 GOODS_COLUMN_COUNT = 6
+
+GOODS_USHK_COLUMN_INDEX = 6
+
+GOODS_SAM_MB_CASH_COLUMN_INDEX = 7
+
+
+def _ushk_cell_value(value: bool) -> str:
+    return "1" if value else "0"
+
+
+def _parse_ushk_cell(value) -> bool:
+    s = str(value or "").strip().lower()
+    return s in ("1", "true", "да", "yes")
+
 
 def write_goods_xlsx(path: Path, rows: list[StockRow]) -> None:
 
@@ -462,13 +545,17 @@ def write_goods_xlsx(path: Path, rows: list[StockRow]) -> None:
 
                 r.source,
 
+                _ushk_cell_value(r.ushk_in_stock),
+
+                _ushk_cell_value(r.sam_mb_cash_price),
+
             ]
 
             for r in rows
 
         ],
 
-        columns=["артикул", "номенклатура", "количество", "цена", "цена_avito", "source"],
+        columns=["артикул", "номенклатура", "количество", "цена", "цена_avito", "source", "ушк", "сам_мб_40"],
 
     )
 
@@ -481,6 +568,10 @@ def fetch_merged_stock(cfg: StockSourcesSettings, secrets: dict) -> list[StockRo
     g_rows: list[StockRow] = []
 
     d_rows: list[StockRow] = []
+
+    ushk_articles: frozenset[str] = frozenset()
+
+    sam_mb_cash_articles: frozenset[str] = frozenset()
 
     if cfg.google_enabled:
 
@@ -496,13 +587,26 @@ def fetch_merged_stock(cfg: StockSourcesSettings, secrets: dict) -> list[StockRo
 
     if cfg.db_enabled:
 
-        d_rows = fetch_db_rows(cfg, secrets)
+        register_lines = _load_register_lines(cfg, secrets)
+
+        prio_cfg = _priority_config(cfg)
+
+        ushk_articles = articles_with_ushk_stock(register_lines, prio_cfg)
+
+        sam_mb_cash_articles = articles_with_sam_mb_cash_stock(register_lines, prio_cfg)
+
+        d_rows = _rows_from_register_lines(register_lines, cfg)
 
     if not cfg.google_enabled and not cfg.db_enabled:
 
         raise ValueError("stock_sources: включите google и/или db")
 
-    return merge_rows(g_rows, d_rows)
+    return merge_rows(
+        g_rows,
+        d_rows,
+        ushk_articles=ushk_articles,
+        sam_mb_cash_articles=sam_mb_cash_articles,
+    )
 
 def refresh_goods_file(
 

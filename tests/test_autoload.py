@@ -9,9 +9,13 @@ from avito.autoload import (
     _apply_descriptions_to_sheet,
     _apply_listing_ids_to_sheet,
     _apply_quantities_to_sheet,
+    _availability_headline,
+    _payment_terms,
     _quantity_label,
     _remove_rows_without_photos,
     _sync_avito_ids_to_sheet,
+    _sync_merge_ads_to_sheet,
+    _sync_multi_names_to_sheet,
     _sync_photo_urls_to_sheet,
     _ensure_posting_rows_in_sheet,
     _apply_prices_to_sheet,
@@ -516,7 +520,7 @@ class TestAutoload(unittest.TestCase):
 
     def test_format_description_includes_marketing_block(self):
         tpl = (
-            '<p><strong>Шины в наличии!</strong></p>'
+            '<p><strong>{availability_headline}</strong></p>'
             '<p>Новые шины &quot;{nomenclature}&quot;🛞🛞🛞</p>'
             "<p>{model_description}</p>"
         )
@@ -528,11 +532,76 @@ class TestAutoload(unittest.TestCase):
             quantity="4",
             model_description="<p>Описание модели</p>",
             store_defaults={"phone": "79273181543"},
+            ushk_in_stock=True,
         )
         self.assertIn("Шины в наличии!", out)
         self.assertIn("Kumho Ecowing ES31 195/65 R15 91H", out)
         self.assertIn("🛞", out)
         self.assertIn("Описание модели", out)
+
+    def test_format_description_order_when_no_ushk(self):
+        tpl = "<p><strong>{availability_headline}</strong></p>"
+        out = _format_description(
+            tpl,
+            nomenclature="Tire",
+            article="1",
+            price=5000,
+            quantity="4",
+            model_description="",
+            store_defaults={},
+            ushk_in_stock=False,
+        )
+        self.assertIn("Шины под заказ 1-2 дня", out)
+
+    def test_availability_headline(self):
+        self.assertEqual(_availability_headline(True), "Шины в наличии!")
+        self.assertEqual(_availability_headline(False), "Шины под заказ 1-2 дня")
+
+    def test_payment_terms(self):
+        self.assertEqual(_payment_terms(True), "Цена за наличный расчет")
+        self.assertEqual(_payment_terms(False), "Любая форма оплаты, НДС")
+
+    def test_format_description_payment_terms(self):
+        tpl = "<p><strong>{payment_terms}</strong></p>"
+        out = _format_description(
+            tpl,
+            nomenclature="Tire",
+            article="1",
+            price=5000,
+            quantity="4",
+            model_description="",
+            store_defaults={},
+            sam_mb_cash_price=True,
+        )
+        self.assertIn("Цена за наличный расчет", out)
+
+    def test_sync_merge_ads_enables_multiitem(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.cell(2, 1, "Уникальный идентификатор объявления")
+        ws.cell(2, 2, "Соединять это объявление с другими объявлениями")
+        ws.cell(5, 1, "md_100")
+        ws.cell(5, 2, "Нет")
+        headers = {"Уникальный идентификатор объявления": 1, "Соединять это объявление с другими объявлениями": 2}
+        n = _sync_merge_ads_to_sheet(ws, headers)
+        self.assertEqual(n, 1)
+        self.assertEqual(ws.cell(5, 2).value, "Да")
+
+    def test_sync_multi_names_groups_by_size(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.cell(2, 1, "Название объявления")
+        ws.cell(2, 2, "Название мультиобъявления")
+        ws.cell(5, 1, "Kumho Ecowing ES31 195/65 R15 91H")
+        ws.cell(6, 1, "Nokian Nordman 7 195/65 R15 95H")
+        ws.cell(7, 1, "Yokohama Geolandar G015 245/70 R16 111H")
+        headers = {"Название объявления": 1, "Название мультиобъявления": 2}
+        changed, groups = _sync_multi_names_to_sheet(ws, headers, title_col=1)
+        self.assertEqual(changed, 3)
+        self.assertEqual(groups, 2)
+        self.assertEqual(ws.cell(5, 2).value, "19565R15")
+        self.assertEqual(ws.cell(6, 2).value, "19565R15")
+        self.assertEqual(ws.cell(7, 2).value, "24570R16")
 
     def test_apply_descriptions_updates_all_rows(self):
         wb = Workbook()
@@ -552,10 +621,11 @@ class TestAutoload(unittest.TestCase):
                     "артикул": "12044",
                     "recommended_price": 4110,
                     "количество": 4,
+                    "ушк_в_наличии": True,
                 }
             ]
         )
-        tpl = '<p><strong>Шины в наличии!</strong></p><p>{nomenclature}</p>'
+        tpl = '<p><strong>{availability_headline}</strong></p><p>{nomenclature}</p>'
         from avito.config import AutoloadSettings
         from pathlib import Path
 
@@ -613,13 +683,13 @@ class TestAutoload(unittest.TestCase):
         self.assertEqual(_quantity_label("4", max_quantity=12), "4")
         self.assertEqual(_quantity_label("", max_quantity=12), "1")
 
-    def test_apply_quantities_updates_sheet(self):
+    def test_apply_quantities_always_one_for_price(self):
         wb = Workbook()
         ws = wb.active
         ws.cell(2, 1, "Название объявления")
         ws.cell(2, 2, "Количество")
         ws.cell(5, 1, "Kumho Ecowing ES31 195/65 R15 91H")
-        ws.cell(5, 2, "4")
+        ws.cell(5, 2, "6")
         posting = pd.DataFrame(
             [
                 {
@@ -638,7 +708,7 @@ class TestAutoload(unittest.TestCase):
             max_quantity=12,
         )
         self.assertEqual(n, 1)
-        self.assertEqual(str(ws.cell(5, 2).value), "12")
+        self.assertEqual(str(ws.cell(5, 2).value), "1")
 
     def test_save_workbook_fallback_when_locked(self):
         with tempfile.TemporaryDirectory() as tmp:

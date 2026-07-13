@@ -12,5 +12,7 @@ avito_publish:
   enabled: true
   report_email: md@shinaufa.ru
 
+avito_sync:
+  enabled: true
 photo_upload:
   enabled: true

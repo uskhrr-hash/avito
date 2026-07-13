@@ -23,7 +23,7 @@ LOG = logging.getLogger(__name__)
 from avito.stores import Store, StoresConfig, merge_defaults
 from avito.model_descriptions import lookup_model_description
 from avito.pricing import round_price_to_tens
-from avito.title_parse import parse_title_fields
+from avito.title_parse import parse_title_fields, build_multi_name_from_title
 
 # Строки шаблона (1-based): 1 категория, 2 заголовки, 3 обязательность, 4 подсказки, 5+ данные
 DATA_START_ROW = 5
@@ -160,11 +160,43 @@ def _photo_cfg(cfg: AutoloadSettings) -> PhotoNamingSettings:
 
 
 MAX_AVITO_DESCRIPTION_LEN = 7500
+# В шаблоне Авито колонка «Количество» = за сколько шт указана «Цена», не остаток на складе.
+AUTOLOAD_PRICE_QUANTITY = "1"
 
 
 class _SafeDict(dict):
     def __missing__(self, key):
         return ""
+
+
+def _availability_headline(ushk_in_stock: bool) -> str:
+    if ushk_in_stock:
+        return "Шины в наличии!"
+    return "Шины под заказ 1-2 дня"
+
+
+def _posting_ushk_in_stock(post_row) -> bool:
+    if post_row is None:
+        return False
+    val = post_row.get("ушк_в_наличии")
+    if val is True:
+        return True
+    return str(val or "").strip().lower() in ("true", "1", "да", "yes")
+
+
+def _posting_sam_mb_cash_price(post_row) -> bool:
+    if post_row is None:
+        return False
+    val = post_row.get("цена_за_наличный_расчет")
+    if val is True:
+        return True
+    return str(val or "").strip().lower() in ("true", "1", "да", "yes")
+
+
+def _payment_terms(sam_mb_cash_price: bool) -> str:
+    if sam_mb_cash_price:
+        return "Цена за наличный расчет"
+    return "Любая форма оплаты, НДС"
 
 
 def _autoload_price(value) -> int:
@@ -224,17 +256,14 @@ def _apply_quantities_to_sheet(
     *,
     qty_col: int | None,
     title_col: int | None,
-    posting_df: pd.DataFrame,
-    max_quantity: int,
+    posting_df: pd.DataFrame | None = None,
+    max_quantity: int | None = None,
 ) -> int:
-    """Колонка «Количество» на всех строках: остаток из posting, иначе 1."""
+    """Колонка «Количество» = всегда 1 (цена в файле за 1 шт). Остаток — только в описании."""
+    del posting_df, max_quantity
     if not qty_col:
         return 0
 
-    post_by_nom = _posting_row_lookup(
-        posting_df,
-        max_quantity=max_quantity,
-    )
     changed = 0
     for row_idx in range(DATA_START_ROW, ws.max_row + 1):
         if not title_col:
@@ -242,11 +271,9 @@ def _apply_quantities_to_sheet(
         title = str(ws.cell(row_idx, title_col).value or "").strip()
         if not title:
             continue
-        post = post_by_nom.get(title)
-        new_qty = post["quantity"] if post else "1"
         current = str(ws.cell(row_idx, qty_col).value or "").strip()
-        if current != new_qty:
-            ws.cell(row_idx, qty_col, new_qty)
+        if current != AUTOLOAD_PRICE_QUANTITY:
+            ws.cell(row_idx, qty_col, AUTOLOAD_PRICE_QUANTITY)
             changed += 1
     return changed
 
@@ -303,14 +330,9 @@ def _apply_descriptions_to_sheet(
             price_int = 0
 
         if post.get("quantity"):
-            qty = post["quantity"]
-        elif qty_col:
-            qty = _quantity_label(
-                str(ws.cell(row_idx, qty_col).value or ""),
-                max_quantity=cfg.max_listing_quantity,
-            )
+            stock_qty = post["quantity"]
         else:
-            qty = "1"
+            stock_qty = "1"
 
         fields = parse_title_fields(nom)
         model_desc = lookup_model_description(
@@ -327,10 +349,12 @@ def _apply_descriptions_to_sheet(
             nomenclature=nom,
             article=article,
             price=price_int,
-            quantity=qty,
+            quantity=stock_qty,
             model_description=model_desc,
             store_pitch=cfg.store_pitch_html,
             store_defaults=row_defaults,
+            ushk_in_stock=bool(post.get("ushk_in_stock")),
+            sam_mb_cash_price=bool(post.get("sam_mb_cash_price")),
         )
         current = str(ws.cell(row_idx, desc_col).value or "")
         if current != new_desc:
@@ -632,6 +656,8 @@ def _posting_row_lookup(
                 str(row.get("количество", "")),
                 max_quantity=max_quantity,
             ),
+            "ushk_in_stock": _posting_ushk_in_stock(row),
+            "sam_mb_cash_price": _posting_sam_mb_cash_price(row),
         }
     return out
 
@@ -646,6 +672,8 @@ def _format_description(
     model_description: str,
     store_pitch: str = "",
     store_defaults: dict[str, str],
+    ushk_in_stock: bool = False,
+    sam_mb_cash_price: bool = False,
 ) -> str:
     payload = _SafeDict(
         nomenclature=nomenclature,
@@ -653,6 +681,8 @@ def _format_description(
         price=str(price),
         price_human=_format_price(price),
         quantity=quantity,
+        availability_headline=_availability_headline(ushk_in_stock),
+        payment_terms=_payment_terms(sam_mb_cash_price),
         model_description=model_description,
         store_pitch=store_pitch or "",
         contact_person=store_defaults.get("contact_person", ""),
@@ -667,7 +697,7 @@ def _format_description(
 
 
 def _quantity_label(qty: str, *, max_quantity: int = 12) -> str:
-    """Остаток для колонки «Количество» (цена в файле — всегда за 1 шт)."""
+    """Остаток на складе для текста описания (не для колонки «Количество» в Excel)."""
     q = str(qty).strip()
     if not q or q.lower() == "nan":
         return "1"
@@ -1148,6 +1178,81 @@ _STORE_FORCE_KEYS = frozenset(
     {"contact_person", "phone", "address", "contact_method", "company", "email"}
 )
 
+# MultiItem / «Мультиобъявление» в ЛК Авито
+_MERGE_ADS_HEADERS = (
+    "Соединять это объявление с другими объявлениями",
+    "Мультиобъявление",
+    "MultiItem",
+)
+
+_MULTI_NAME_HEADERS = (
+    "Название мультиобъявления",
+    "MultiName",
+)
+
+
+def _col_any(headers: dict[str, int], names: tuple[str, ...]) -> int | None:
+    for name in names:
+        col = _col(headers, name)
+        if col:
+            return col
+    return None
+
+
+def _sync_merge_ads_to_sheet(
+    ws,
+    headers: dict[str, int],
+    *,
+    value: str = "Да",
+) -> int:
+    """Включить мультиобъявление (MultiItem) во всех строках данных."""
+    col = _col_any(headers, _MERGE_ADS_HEADERS)
+    if not col:
+        return 0
+    changed = 0
+    for row_idx in range(DATA_START_ROW, ws.max_row + 1):
+        current = str(ws.cell(row_idx, col).value or "").strip()
+        if current.lower() in ("", "nan", "нет", "no", "false", "0"):
+            ws.cell(row_idx, col, value)
+            changed += 1
+        elif current != value:
+            ws.cell(row_idx, col, value)
+            changed += 1
+    return changed
+
+
+def _sync_multi_names_to_sheet(
+    ws,
+    headers: dict[str, int],
+    *,
+    title_col: int | None,
+) -> tuple[int, int]:
+    """MultiName по размеру из названия (все 195/65 R15 → 19565R15)."""
+    col = _col_any(headers, _MULTI_NAME_HEADERS)
+    if not col or not title_col:
+        return 0, 0
+    changed = 0
+    groups: set[str] = set()
+    for row_idx in range(DATA_START_ROW, ws.max_row + 1):
+        title = str(ws.cell(row_idx, title_col).value or "").strip()
+        if not title:
+            continue
+        multi_name = build_multi_name_from_title(title)
+        current = str(ws.cell(row_idx, col).value or "").strip()
+        if current.endswith(".0"):
+            current = current.split(".")[0]
+        if current.lower() == "nan":
+            current = ""
+        if multi_name:
+            groups.add(multi_name)
+            if current != multi_name:
+                ws.cell(row_idx, col, multi_name)
+                changed += 1
+        elif current:
+            ws.cell(row_idx, col, "")
+            changed += 1
+    return changed, len(groups)
+
 
 def _apply_defaults(
     ws,
@@ -1362,7 +1467,7 @@ def fill_autoload_template(
                 "model": fields.get("model", ""),
                 "пример_номенклатуры": nom,
             }
-        qty = _quantity_label(
+        stock_qty = _quantity_label(
             str(post.get("количество", "")),
             max_quantity=cfg.max_listing_quantity,
         )
@@ -1429,14 +1534,16 @@ def fill_autoload_template(
                         nomenclature=nom,
                         article=article,
                         price=price_int,
-                        quantity=qty,
+                        quantity=stock_qty,
                         model_description=model_desc,
                         store_pitch=cfg.store_pitch_html,
                         store_defaults=row_defaults,
+                        ushk_in_stock=_posting_ushk_in_stock(post),
+                        sam_mb_cash_price=_posting_sam_mb_cash_price(post),
                     ),
                 )
             if c_qty:
-                ws.cell(row_idx, c_qty, qty)
+                ws.cell(row_idx, c_qty, AUTOLOAD_PRICE_QUANTITY)
             if c_brand and fields["brand"]:
                 ws.cell(row_idx, c_brand, fields["brand"])
             if c_model and fields["model"]:
@@ -1462,7 +1569,7 @@ def fill_autoload_template(
                 row_idx,
                 headers,
                 row_defaults,
-                force_keys=_STORE_FORCE_KEYS,
+                force_keys=_STORE_FORCE_KEYS | frozenset({"merge_ads"}),
             )
 
     rounded = _apply_prices_to_sheet(
@@ -1483,9 +1590,9 @@ def fill_autoload_template(
     )
     if qty_updated:
         LOG.info(
-            "Количество в файле: обновлено %s строк (макс. %s шт, цена за 1 шт)",
+            "Колонка «Количество»: исправлено %s строк → %s (цена за 1 шт)",
             qty_updated,
-            cfg.max_listing_quantity,
+            AUTOLOAD_PRICE_QUANTITY,
         )
 
     photo_set, photo_cleared = _sync_photo_urls_to_sheet(
@@ -1549,6 +1656,18 @@ def fill_autoload_template(
     if descriptions:
         LOG.info("Описания в файле: обновлено %s строк", descriptions)
 
+    merge_ads_set = _sync_merge_ads_to_sheet(ws, headers)
+    if merge_ads_set:
+        LOG.info("Мультиобъявление (MultiItem): включено в %s строках", merge_ads_set)
+
+    multi_set, multi_groups = _sync_multi_names_to_sheet(ws, headers, title_col=c_title)
+    if multi_set:
+        LOG.info(
+            "MultiName по размеру: обновлено %s строк, групп размеров: %s",
+            multi_set,
+            multi_groups,
+        )
+
     saved_path = save_workbook(wb, output_path)
     stats["output_path"] = str(saved_path)
     stats["removed_rows"] = removed
@@ -1556,6 +1675,70 @@ def fill_autoload_template(
     stats["missing_models"] = list(missing_models.values())
     stats["photos_dir"] = str(local_photos) if local_photos else ""
     return stats
+
+
+def _row_has_avito_id(
+    ws,
+    row_idx: int,
+    *,
+    c_id: int | None,
+    c_avito: int | None,
+    avito_ids: dict[str, str],
+) -> bool:
+    avito_cell = ""
+    if c_avito:
+        avito_cell = str(ws.cell(row_idx, c_avito).value or "").strip()
+        if avito_cell.endswith(".0"):
+            avito_cell = avito_cell.split(".")[0]
+        if avito_cell and avito_cell.lower() != "nan":
+            return True
+    listing_id = normalize_article_id(ws.cell(row_idx, c_id).value if c_id else None)
+    article = _article_from_listing_id(listing_id) if listing_id else ""
+    return bool(_avito_id_for_row(listing_id, article, avito_ids))
+
+
+def filter_new_listings_workbook(
+    source_path: Path,
+    output_path: Path,
+    *,
+    avito_ids: dict[str, str],
+) -> tuple[int, int]:
+    """
+    Фид для публикации: только новые объявления (без номера на Avito).
+
+    Уже размещённые строки убираются — их цену/остаток обновляем через API.
+    """
+    wb = load_workbook(source_path)
+    sheet_name = _find_data_sheet(wb)
+    ws = wb[sheet_name]
+    headers = _header_map(ws)
+    c_id = _col(headers, "Уникальный идентификатор объявления")
+    c_avito = _col(headers, "Номер объявления на Авито")
+    c_title = _col(headers, "Название объявления")
+
+    to_delete: list[int] = []
+    kept = 0
+    for row_idx in range(DATA_START_ROW, ws.max_row + 1):
+        title = str(ws.cell(row_idx, c_title).value or "").strip() if c_title else ""
+        listing_id = normalize_article_id(ws.cell(row_idx, c_id).value if c_id else None)
+        if not title and not listing_id:
+            continue
+        if _row_has_avito_id(ws, row_idx, c_id=c_id, c_avito=c_avito, avito_ids=avito_ids):
+            to_delete.append(row_idx)
+        else:
+            kept += 1
+
+    for row_idx in sorted(to_delete, reverse=True):
+        ws.delete_rows(row_idx, 1)
+
+    saved = save_workbook(wb, output_path)
+    LOG.info(
+        "Фид только новые: %s строк, убрано уже на Avito: %s → %s",
+        kept,
+        len(to_delete),
+        saved.name,
+    )
+    return kept, len(to_delete)
 
 
 _DEFAULT_HEADER_ALIASES = {
@@ -1569,6 +1752,7 @@ _DEFAULT_HEADER_ALIASES = {
     "ad_type": "Вид объявления",
     "product_type": "Тип товара",
     "merge_ads": "Соединять это объявление с другими объявлениями",
+    # альтернативные заголовки в новых шаблонах Авито — см. _MERGE_ADS_HEADERS
     "free_mounting": "Бесплатный шиномонтаж",
     "company": "Название компании",
     "email": "Почта",

@@ -172,3 +172,74 @@ def get_last_successful_upload(client: AvitoApiClient) -> dict[str, Any]:
     data = client.request("GET", "/autoload/v4/uploads/last_successful")
     return data if isinstance(data, dict) else {}
 
+
+def update_item_price(client: AvitoApiClient, item_id: int, price: int) -> dict[str, Any]:
+    """POST /core/v1/items/{item_id}/update_price — цена сразу видна покупателям."""
+    data = client.request(
+        "POST",
+        f"/core/v1/items/{int(item_id)}/update_price",
+        json_body={"price": int(price)},
+    )
+    return data if isinstance(data, dict) else {}
+
+
+def update_stocks(
+    client: AvitoApiClient,
+    stocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """
+    PUT /stock-management/1/stocks — до 200 позиций за запрос.
+
+    Каждый элемент: item_id (int), quantity (int), external_id (str, опционально).
+    """
+    if not stocks:
+        return []
+    if len(stocks) > 200:
+        raise ValueError("Avito stocks: не более 200 позиций за запрос")
+    data = client.request(
+        "PUT",
+        "/stock-management/1/stocks",
+        json_body={"stocks": stocks},
+    )
+    if isinstance(data, dict):
+        items = data.get("stocks") or data.get("items")
+        if isinstance(items, list):
+            return items
+    if isinstance(data, list):
+        return data
+    return []
+
+
+def fetch_avito_ids_by_ad_ids(
+    client: AvitoApiClient,
+    ad_ids: list[str],
+    *,
+    batch_size: int = 100,
+) -> dict[str, int]:
+    """
+    GET /autoload/v2/items/avito_ids — наш Id (md_123) → номер объявления на Avito.
+    """
+    clean = [str(x).strip() for x in ad_ids if str(x).strip()]
+    if not clean:
+        return {}
+    out: dict[str, int] = {}
+    step = max(1, min(int(batch_size), 200))
+    for i in range(0, len(clean), step):
+        chunk = clean[i : i + step]
+        query = ",".join(chunk)
+        data = client.request("GET", "/autoload/v2/items/avito_ids", params={"query": query})
+        items = (data or {}).get("items") if isinstance(data, dict) else None
+        if not isinstance(items, list):
+            continue
+        for row in items:
+            if not isinstance(row, dict):
+                continue
+            ad_id = str(row.get("ad_id", "") or "").strip()
+            avito_id = row.get("avito_id")
+            if ad_id and avito_id is not None:
+                try:
+                    out[ad_id] = int(avito_id)
+                except (TypeError, ValueError):
+                    pass
+    return out
+

@@ -8,6 +8,7 @@ from avito.avito_api import (
     fetch_token,
     load_avito_api_config,
     update_autoload_profile,
+    update_stocks,
 )
 
 
@@ -71,6 +72,25 @@ class TestAvitoApi(unittest.TestCase):
                 feed_url="https://example.com/feed.xlsx",
                 report_email="",
             )
+
+    @patch("avito.avito_api.fetch_token")
+    @patch("avito.avito_api.requests.request")
+    def test_update_stocks(self, mock_req, mock_token):
+        mock_token.return_value = __import__(
+            "avito.avito_api", fromlist=["AvitoToken"]
+        ).AvitoToken(access_token="t", expires_at=1e12)
+        mock_req.return_value = MagicMock(
+            status_code=200,
+            content=b'{"stocks":[{"success":true}]}',
+            json=lambda: {"stocks": [{"success": True}]},
+        )
+        client = AvitoApiClient(AvitoApiConfig(client_id="a", client_secret="b"))
+        result = update_stocks(
+            client,
+            [{"item_id": 1, "quantity": 5, "external_id": "md_1"}],
+        )
+        self.assertEqual(result, [{"success": True}])
+        self.assertEqual(mock_req.call_args.kwargs["json"]["stocks"][0]["quantity"], 5)
 
 
 if __name__ == "__main__":

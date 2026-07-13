@@ -35,6 +35,15 @@ stock_sources:
       - Вектра Уфа
       - Колобокс Нижний
       - Колобокс Уфа
+      - Шинсервис
+      - Римэкс
+    # УШК — по префиксу ushk_prefix; остальные — явный список
+    allowed_suppliers:
+      - Сам МБ Уфа
+      - Сам МБ Москва
+      - Бринэкс
+      - Пауэр Уфа
+      - Шининвест
 
 descriptions_db:
   enabled: true
@@ -62,6 +71,14 @@ avito_publish:
   feed_local_dir: /var/www/avito-feed/feeds
   auto_set_profile: true
   auto_upload: true
+
+# Обновление уже размещённых объявлений (цена + остаток через API, без повторной публикации)
+avito_sync:
+  enabled: true
+  dry_run: false
+  stock_batch_size: 200
+  price_pause_sec: 0.4
+  refresh_ids_after_publish: true
 
 # Веб-страница для съёмки фото с телефона (run_photo_upload.py)
 photo_upload:
@@ -126,13 +143,15 @@ autoload:
   skip_without_photos: true
   include_all_goods_in_autoload: false
   avito_ids_file: input/avito_ids.csv
-  # В колонке «Количество» — остаток на складе, не больше этого числа (цена всегда за 1 шт)
+  # Фид только для новых объявлений (без AvitoId) — в publish_avito_feed.py
+  new_listings_feed: input/autoload_new.xlsx
+  # Остаток в описании («на складе»), не в колонке Excel «Количество» (там всегда 1 = цена за 1 шт)
   max_listing_quantity: 12
   description_html: |
-    <p><strong>Шины в наличии!</strong></p>
+    <p><strong>{availability_headline}</strong></p>
     <p>Новые шины &quot;{nomenclature}&quot;🛞🛞🛞</p>
     <p><br></p>
-    <p><strong>Цена за наличные!</strong></p>
+    <p><strong>{payment_terms}</strong></p>
     <p>✅Предоставляем услугу шиномонтажа 👨‍🔧👨‍🔧👨‍🔧</p>
     <p><br></p>
     <p>В наличии и под заказ большой выбор шин и дисков Российских и Зарубежных производителей</p>

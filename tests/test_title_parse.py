@@ -1,7 +1,7 @@
 import unittest
 
 from avito.description_generator import ModelGenInput, build_user_prompt
-from avito.title_parse import parse_title_fields
+from avito.title_parse import parse_title_fields, build_multi_name_from_title
 
 
 class TestTitleParse(unittest.TestCase):
@@ -26,6 +26,17 @@ class TestTitleParse(unittest.TestCase):
         self.assertEqual(f["brand"], "Nokian")
         self.assertIn("Hakkapeliitta", f["model"])
         self.assertEqual(f["width"], "205")
+
+    def test_multi_name_from_size(self):
+        self.assertEqual(
+            build_multi_name_from_title("Kumho Ecowing ES31 195/65 R15 91H"),
+            "19565R15",
+        )
+        self.assertEqual(
+            build_multi_name_from_title("Yokohama Geolandar G015 245/70 R16 111H"),
+            "24570R16",
+        )
+        self.assertEqual(build_multi_name_from_title("No size here"), "")
 
     def test_winter_english_in_name(self):
         from avito.title_parse import infer_season_from_text

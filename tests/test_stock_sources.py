@@ -18,6 +18,7 @@ class TestStockSources(unittest.TestCase):
         self.assertEqual(by["100"].price, 6000)
         self.assertEqual(by["100"].name, "A")
         self.assertEqual(by["100"].source, "google")
+        self.assertTrue(by["100"].sam_mb_cash_price)
         self.assertEqual(by["200"].source, "db")
 
 

@@ -83,6 +83,7 @@ class AutoloadSettings:
     no_photos_file: str
     avito_ids_file: Path
     max_listing_quantity: int = 12
+    new_listings_feed: Path | None = None
 
 
 @dataclass
@@ -107,6 +108,15 @@ class PhotoUploadSettings:
 
 
 @dataclass
+class AvitoSyncSettings:
+    enabled: bool
+    dry_run: bool
+    stock_batch_size: int
+    price_pause_sec: float
+    refresh_ids_after_publish: bool
+
+
+@dataclass
 class AppConfig:
     scrape: ScrapeSettings
     compare: CompareSettings
@@ -116,6 +126,7 @@ class AppConfig:
     stock_sources: "StockSourcesSettings"
     descriptions_db: DescriptionsDbSettings
     photo_upload: PhotoUploadSettings
+    avito_sync: AvitoSyncSettings
 
 
 @dataclass
@@ -138,6 +149,7 @@ class StockSourcesSettings:
     db_ufa_multiplier: float
     db_moscow_multiplier: float
     db_excluded_suppliers: tuple[str, ...]
+    db_allowed_suppliers: tuple[str, ...]
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -224,6 +236,7 @@ def load_config(path: Path) -> AppConfig:
         stock_sources=_load_stock_sources(raw.get("stock_sources") or {}),
         descriptions_db=_load_descriptions_db(raw.get("descriptions_db") or {}, root),
         photo_upload=_load_photo_upload(raw.get("photo_upload") or {}),
+        avito_sync=_load_avito_sync(raw.get("avito_sync") or {}),
     )
 
 
@@ -268,6 +281,15 @@ def _load_stock_sources(raw: dict) -> StockSourcesSettings:
         "Вектра Уфа",
         "Колобокс Нижний",
         "Колобокс Уфа",
+        "Шинсервис",
+        "Римэкс",
+    ]
+    allowed = d_raw.get("allowed_suppliers") or [
+        "Сам МБ Уфа",
+        "Сам МБ Москва",
+        "Бринэкс",
+        "Пауэр Уфа",
+        "Шининвест",
     ]
     return StockSourcesSettings(
         enabled=bool(raw.get("enabled", False)),
@@ -294,6 +316,7 @@ def _load_stock_sources(raw: dict) -> StockSourcesSettings:
         db_ufa_multiplier=float(d_raw.get("ufa_multiplier", 0.9)),
         db_moscow_multiplier=float(d_raw.get("moscow_multiplier", 0.9)),
         db_excluded_suppliers=tuple(str(x).strip() for x in excluded if str(x).strip()),
+        db_allowed_suppliers=tuple(str(x).strip() for x in allowed if str(x).strip()),
     )
 
 
@@ -360,7 +383,7 @@ def _load_autoload(raw: dict) -> AutoloadSettings:
             raw.get(
                 "description_html",
                 (
-                    "<p><strong>Шины в наличии!</strong></p>"
+                    "<p><strong>{availability_headline}</strong></p>"
                     '<p>Новые шины &quot;{nomenclature}&quot;🛞🛞🛞</p>'
                     "<p><strong>Цена за наличные!</strong></p>"
                 ),
@@ -376,6 +399,17 @@ def _load_autoload(raw: dict) -> AutoloadSettings:
         no_photos_file=str(raw.get("no_photos_file", "no_photos.xlsx")),
         avito_ids_file=Path(raw.get("avito_ids_file", "input/avito_ids.csv")),
         max_listing_quantity=max(1, int(raw.get("max_listing_quantity", 12))),
+        new_listings_feed=_optional_path(raw.get("new_listings_feed", "input/autoload_new.xlsx")),
+    )
+
+
+def _load_avito_sync(raw: dict) -> AvitoSyncSettings:
+    return AvitoSyncSettings(
+        enabled=bool(raw.get("enabled", True)),
+        dry_run=bool(raw.get("dry_run", False)),
+        stock_batch_size=max(1, min(int(raw.get("stock_batch_size", 200)), 200)),
+        price_pause_sec=float(raw.get("price_pause_sec", 0.4)),
+        refresh_ids_after_publish=bool(raw.get("refresh_ids_after_publish", True)),
     )
 
 

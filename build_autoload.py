@@ -15,6 +15,7 @@ from avito.autoload import (
     _extract_avito_export_maps,
     avito_ids_for_posting,
     fill_autoload_template,
+    filter_new_listings_workbook,
     load_avito_ids,
     load_posting,
     resolve_autoload_base,
@@ -240,6 +241,22 @@ def main() -> int:
         )
         shutil.copy2(out_path, alt_working)
         working_path = alt_working
+
+    new_feed_path = cfg.new_listings_feed
+    if new_feed_path:
+        if not new_feed_path.is_absolute():
+            new_feed_path = ROOT / new_feed_path
+        kept, removed_existing = filter_new_listings_workbook(
+            working_path,
+            new_feed_path,
+            avito_ids=avito_ids,
+        )
+        LOG.info(
+            "Фид для публикации (только новые): %s строк, без дублей: %s → %s",
+            kept,
+            removed_existing,
+            new_feed_path,
+        )
 
     removed = stats.pop("removed_rows", [])
     removed_path = args.output_dir / f"autoload_removed_{stamp}.csv"

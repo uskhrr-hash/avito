@@ -10,12 +10,14 @@ from avito.photo_upload.overlays import (
 
 
 class TestPhotoGuide(unittest.TestCase):
-    def test_render_guide_contains_examples(self):
+    def test_render_guide_does_not_crash(self):
         html = render_guide_html(base="/photo/")
         self.assertIn("guide-example", html)
         self.assertIn("static/guide/examples/01-stack.jpg", html)
         self.assertIn("static/guide/examples/04-dot.jpg", html)
         self.assertIn("контур появится поверх камеры", html)
+        self.assertIn("Страна производства", html)
+        self.assertIn("Год выпуска", html)
 
     def test_shot_labels_and_overlays(self):
         meta = shot_label(3)
@@ -27,6 +29,12 @@ class TestPhotoGuide(unittest.TestCase):
         self.assertIn("3 лежат + 1 стоит", stack_svg)
         tread_svg = overlay_svg_for_shot(2, camera=True)
         self.assertIn("Протектор крупно", tread_svg)
+        country_svg = overlay_svg_for_shot(3, camera=True)
+        self.assertIn("Страна производства", country_svg)
+        self.assertIn("СТРАНА", country_svg)
+        self.assertIn("<path d=", country_svg)
+        dot_svg = overlay_svg_for_shot(4, camera=True)
+        self.assertIn("DOT 1526", dot_svg)
         svg = overlay_svg_for_shot(4, camera=True)
         self.assertIn("guide-svg", svg)
 

@@ -20,9 +20,13 @@ class TestPhotoGuide(unittest.TestCase):
     def test_shot_labels_and_overlays(self):
         meta = shot_label(3)
         self.assertIn("Страна", meta["title"])
-        self.assertEqual(ghost_image_for_shot(1), EXAMPLE_FILES[1])
+        self.assertEqual(ghost_image_for_shot(1), "")
         self.assertEqual(ghost_image_for_shot(2), "")
-        self.assertEqual(overlay_svg_for_shot(1, camera=True), "")
+        stack_svg = overlay_svg_for_shot(1, camera=True)
+        self.assertIn("guide-svg", stack_svg)
+        self.assertIn("3 лежат + 1 стоит", stack_svg)
+        tread_svg = overlay_svg_for_shot(2, camera=True)
+        self.assertIn("Протектор крупно", tread_svg)
         svg = overlay_svg_for_shot(4, camera=True)
         self.assertIn("guide-svg", svg)
 

@@ -400,6 +400,6 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
   </div>
 
   <script>window.PHOTO_UPLOAD_SESSION = {store_json};</script>
-  <script src="static/app.js?v=4"></script>
+  <script src="static/app.js?v=5"></script>
 </body>
 </html>"""

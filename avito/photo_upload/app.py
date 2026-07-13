@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
+from avito.photo_upload.guide import render_guide_html
 from avito.photo_upload.service import (
     load_no_photos_queue_info,
     lookup_stock,
@@ -59,6 +60,10 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
     )
     app.state.runtime = runtime
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+    @app.get("/guide", response_class=HTMLResponse)
+    async def guide() -> HTMLResponse:
+        return HTMLResponse(render_guide_html(base=_mount_base(runtime)))
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
@@ -257,6 +262,7 @@ def _login_html(runtime: PhotoUploadRuntime) -> str:
   <main class="shell">
     <h1>Фото Avito</h1>
     <p class="lead">Нажмите на свой магазин и введите пароль</p>
+    <a class="login-guide-link" href="guide">📷 Стандарт съёмки: 4 фото с контурами</a>
     <form id="login-form" class="card">
       <p class="field"><span>Магазин</span></p>
       <div class="store-grid" id="store-grid">
@@ -300,7 +306,10 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
       <div class="topbar-title">Фото Avito</div>
       <div class="topbar-sub">{store.label}</div>
     </div>
-    <button type="button" id="logout" class="btn btn-ghost">Выйти</button>
+    <div class="topbar-actions">
+      <a href="guide" class="topbar-guide">Стандарт</a>
+      <button type="button" id="logout" class="btn btn-ghost">Выйти</button>
+    </div>
   </header>
 
   <main class="shell">

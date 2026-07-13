@@ -1,0 +1,144 @@
+.page-guide {
+  padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+}
+
+.page-guide .shell {
+  padding-top: 8px;
+}
+
+.guide-back {
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.guide-intro h1 {
+  font-size: 1.35rem;
+  margin-bottom: 8px;
+}
+
+.guide-order {
+  margin: 14px 0;
+  padding-left: 1.2rem;
+  line-height: 1.55;
+}
+
+.guide-order li + li {
+  margin-top: 4px;
+}
+
+.guide-names code {
+  font-size: 0.88rem;
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.guide-card-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.guide-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-weight: 800;
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.guide-frame {
+  border: 2px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+  background: #fff;
+  margin-bottom: 12px;
+}
+
+.guide-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.guide-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.guide-checklist li {
+  position: relative;
+  padding-left: 28px;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+.guide-checklist li::before {
+  position: absolute;
+  left: 0;
+  top: 0;
+  font-weight: 700;
+}
+
+.guide-checklist li.ok::before {
+  content: "✓";
+  color: #16a34a;
+}
+
+.guide-checklist li.bad::before {
+  content: "✕";
+  color: #dc2626;
+}
+
+.guide-tips h2 {
+  margin-bottom: 10px;
+}
+
+.guide-cta {
+  text-align: center;
+}
+
+.guide-cta p {
+  margin: 0 0 14px;
+  color: var(--muted);
+}
+
+.guide-cta .btn-primary {
+  display: inline-flex;
+  width: auto;
+  min-width: 240px;
+  text-decoration: none;
+}
+
+.login-guide-link {
+  display: block;
+  text-align: center;
+  margin: 0 0 16px;
+  font-weight: 600;
+  color: var(--primary);
+  text-decoration: none;
+}
+
+.login-guide-link:active {
+  opacity: 0.8;
+}
+
+.topbar-guide {
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--primary);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #eff6ff;
+}

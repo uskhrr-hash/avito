@@ -315,7 +315,7 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
   <base href="{base}">
   <title>Фото — {store.label}</title>
   <link rel="stylesheet" href="static/app.css">
-  <link rel="stylesheet" href="static/camera.css">
+  <link rel="stylesheet" href="static/camera.css?v=3">
 </head>
 <body class="page-app">
   <header class="topbar">
@@ -393,11 +393,12 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
     </div>
     <div class="camera-bottom">
       <button type="button" id="camera-capture" class="btn btn-primary camera-shutter">Снять</button>
+      <button type="button" id="camera-system" class="btn btn-secondary camera-system-btn">Системная камера</button>
       <a id="camera-example-link" class="camera-example-link" href="guide" target="_blank" rel="noopener">Эталон</a>
     </div>
   </div>
 
   <script>window.PHOTO_UPLOAD_SESSION = {store_json};</script>
-  <script src="static/app.js"></script>
+  <script src="static/app.js?v=3"></script>
 </body>
 </html>"""

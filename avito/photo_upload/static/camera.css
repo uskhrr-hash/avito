@@ -80,7 +80,7 @@
 
 .camera-bottom {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr 1fr;
   gap: 10px;
   align-items: center;
   padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
@@ -88,15 +88,26 @@
 }
 
 .camera-shutter {
+  grid-column: 1 / -1;
   min-height: 56px;
 }
 
+.camera-system-btn {
+  grid-column: 1 / -1;
+  min-height: 48px;
+  background: #1f2937;
+  color: #fff;
+  border: 1px solid #4b5563;
+}
+
 .camera-example-link {
+  grid-column: 1 / -1;
+  justify-self: center;
   color: #93c5fd;
   text-decoration: none;
   font-weight: 600;
   font-size: 0.95rem;
-  padding: 12px;
+  padding: 4px 12px 0;
 }
 
 .shot-hint {

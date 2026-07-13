@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import shutil
 import sys
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from avito.autoload import (
     find_latest_avito_export,
     load_avito_ids,
     load_posting,
+    merge_autoload_feed_workbooks,
     normalize_article_id,
     save_avito_ids_csv,
 )
@@ -78,6 +78,29 @@ def _resolve_schedule(profile: dict, pub: dict) -> list[dict]:
     if sched:
         return list(sched)
     return list(DEFAULT_AUTOLOAD_SCHEDULE)
+
+
+def _resolve_feed_path(config_parent: Path, path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    if not path.is_absolute():
+        path = config_parent / path
+    return path
+
+
+def _collect_publish_sources(app, config_path: Path) -> tuple[list[Path], int, int]:
+    """Новые объявления + обновления фото (разные файлы, без пересечения по AvitoId)."""
+    parent = config_path.parent
+    new_path = _resolve_feed_path(parent, app.autoload.new_listings_feed)
+    photo_path = _resolve_feed_path(parent, app.autoload.photo_updates_feed)
+    new_count = _count_data_rows(new_path) if new_path and new_path.is_file() else 0
+    photo_count = _count_data_rows(photo_path) if photo_path and photo_path.is_file() else 0
+    sources: list[Path] = []
+    if new_count > 0 and new_path:
+        sources.append(new_path)
+    if photo_count > 0 and photo_path:
+        sources.append(photo_path)
+    return sources, new_count, photo_count
 
 
 def _count_data_rows(path: Path) -> int:
@@ -200,34 +223,63 @@ def main() -> int:
         return 1
 
     app = load_config(args.config)
-    source = args.source
-    if source is None:
-        source = app.autoload.new_listings_feed or app.autoload.working_file
-    if not source.is_absolute():
-        source = args.config.parent / source
-    if not source.is_file():
-        LOG.error("Нет файла фида: %s (сначала build_autoload.py)", source)
-        return 1
+    new_feed_for_ids: Path | None = None
+    if args.source is not None:
+        source = args.source
+        if not source.is_absolute():
+            source = args.config.parent / source
+        if not source.is_file():
+            LOG.error("Нет файла фида: %s", source)
+            return 1
+        publish_sources = [source]
+        new_count = _count_data_rows(source)
+        photo_count = 0
+        new_feed_for_ids = source
+    else:
+        publish_sources, new_count, photo_count = _collect_publish_sources(
+            app, args.config
+        )
+        new_path = _resolve_feed_path(
+            args.config.parent, app.autoload.new_listings_feed
+        )
+        if new_path and new_path.is_file():
+            new_feed_for_ids = new_path
+        if not publish_sources:
+            LOG.error(
+                "Нет файлов для публикации (сначала build_autoload.py: "
+                "autoload_new.xlsx / autoload_photo_updates.xlsx)"
+            )
+            return 1
 
     if args.dry_run:
-        LOG.info("dry-run: фид %s → %s", source, feed_url)
+        LOG.info(
+            "dry-run: новых=%s, обновление фото=%s → %s",
+            new_count,
+            photo_count,
+            feed_url,
+        )
         return 0
 
     sync_rc = 0
     if not args.no_sync:
         sync_rc = _run_api_sync(app, args.config, dry_run=False)
 
-    row_count = _count_data_rows(source)
-    if row_count == 0:
+    if new_count == 0 and photo_count == 0:
         LOG.info(
-            "Новых объявлений для автозагрузки нет — upload пропущен (дубли не создаём)"
+            "Новых объявлений и обновлений фото нет — upload пропущен (дубли не создаём)"
         )
         return sync_rc
 
     target = feed_dir / "autoload.xlsx"
-    LOG.info("Фид (только новые): %s (%s строк) → %s", source, row_count, target)
     feed_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source, target)
+    row_count = merge_autoload_feed_workbooks(publish_sources, target)
+    LOG.info(
+        "Фид: новых=%s, обновление фото=%s, всего=%s строк → %s",
+        new_count,
+        photo_count,
+        row_count,
+        target,
+    )
     LOG.info("Скопировано (%s байт)", target.stat().st_size)
 
     secrets_path = app.stock_sources.secrets_file
@@ -272,7 +324,7 @@ def main() -> int:
         LOG.warning("feeds_data пустой — включите auto_set_profile или настройте URL в ЛК")
 
     if not args.no_upload and pub.get("auto_upload", True):
-        LOG.info("Запуск upload (только новые объявления)…")
+        LOG.info("Запуск upload (новые + обновление фото)…")
         try:
             trigger_autoload_upload(client)
             LOG.info("upload принят Avito")
@@ -291,8 +343,8 @@ def main() -> int:
         except Exception as exc:
             LOG.warning("last_successful upload: %s", exc)
 
-        if app.avito_sync.refresh_ids_after_publish:
-            ad_ids = _listing_ids_from_feed(source)
+        if app.avito_sync.refresh_ids_after_publish and new_feed_for_ids:
+            ad_ids = _listing_ids_from_feed(new_feed_for_ids)
             if ad_ids:
                 avito_ids_path = ROOT / app.autoload.avito_ids_file
                 existing = (

@@ -145,6 +145,8 @@ autoload:
   avito_ids_file: input/avito_ids.csv
   # Фид только для новых объявлений (без AvitoId) — в publish_avito_feed.py
   new_listings_feed: input/autoload_new.xlsx
+  # Уже на Avito + фото артикула — обновление без дублей (тот же Id + AvitoId)
+  photo_updates_feed: input/autoload_photo_updates.xlsx
   # Остаток в описании («на складе»), не в колонке Excel «Количество» (там всегда 1 = цена за 1 шт)
   max_listing_quantity: 12
   description_html: |

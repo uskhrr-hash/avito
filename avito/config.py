@@ -84,6 +84,7 @@ class AutoloadSettings:
     avito_ids_file: Path
     max_listing_quantity: int = 12
     new_listings_feed: Path | None = None
+    photo_updates_feed: Path | None = None
 
 
 @dataclass
@@ -400,6 +401,9 @@ def _load_autoload(raw: dict) -> AutoloadSettings:
         avito_ids_file=Path(raw.get("avito_ids_file", "input/avito_ids.csv")),
         max_listing_quantity=max(1, int(raw.get("max_listing_quantity", 12))),
         new_listings_feed=_optional_path(raw.get("new_listings_feed", "input/autoload_new.xlsx")),
+        photo_updates_feed=_optional_path(
+            raw.get("photo_updates_feed", "input/autoload_photo_updates.xlsx")
+        ),
     )
 
 

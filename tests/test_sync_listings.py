@@ -6,6 +6,8 @@ import pandas as pd
 from avito.autoload import (
     DATA_START_ROW,
     filter_new_listings_workbook,
+    filter_photo_updates_workbook,
+    merge_autoload_feed_workbooks,
     save_workbook,
 )
 from avito.avito_api import (
@@ -134,6 +136,81 @@ class TestFilterNewListings(unittest.TestCase):
                 str(ws2.cell(DATA_START_ROW, 1).value),
                 "md_200",
             )
+
+
+class TestFilterPhotoUpdates(unittest.TestCase):
+    def test_filter_keeps_existing_with_article_photos(self):
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Шины"
+        ws.cell(2, 1, "Уникальный идентификатор объявления")
+        ws.cell(2, 2, "Номер объявления на Авито")
+        ws.cell(2, 3, "Название объявления")
+        ws.cell(2, 4, "Ссылки на фото")
+        ws.cell(DATA_START_ROW, 1, "md_100")
+        ws.cell(DATA_START_ROW, 2, "111")
+        ws.cell(DATA_START_ROW, 3, "Old tire")
+        ws.cell(
+            DATA_START_ROW,
+            4,
+            "https://avito.shinaufa.ru/photos/md/md100-1.jpg",
+        )
+        ws.cell(DATA_START_ROW + 1, 1, "md_200")
+        ws.cell(DATA_START_ROW + 1, 2, "222")
+        ws.cell(DATA_START_ROW + 1, 3, "Model photo")
+        ws.cell(
+            DATA_START_ROW + 1,
+            4,
+            "https://avito.shinaufa.ru/photos/Yokohama Geolandar.jpg",
+        )
+        ws.cell(DATA_START_ROW + 2, 1, "md_300")
+        ws.cell(DATA_START_ROW + 2, 3, "New tire")
+
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "all.xlsx"
+            out = Path(tmp) / "photos.xlsx"
+            save_workbook(wb, src)
+            kept, removed = filter_photo_updates_workbook(
+                src,
+                out,
+                avito_ids={"md_100": "111", "100": "111", "md_200": "222"},
+            )
+            self.assertEqual(kept, 1)
+            self.assertGreater(removed, 0)
+            wb2 = __import__("openpyxl").load_workbook(out)
+            ws2 = wb2.active
+            self.assertEqual(str(ws2.cell(DATA_START_ROW, 1).value), "md_100")
+
+    def test_merge_feed_workbooks(self):
+        import tempfile
+        from pathlib import Path
+
+        def _row(wb, lid, title):
+            ws = wb.active
+            ws.title = "Шины"
+            ws.cell(2, 1, "Уникальный идентификатор объявления")
+            ws.cell(2, 3, "Название объявления")
+            row = ws.max_row + 1 if ws.max_row >= DATA_START_ROW else DATA_START_ROW
+            if row < DATA_START_ROW:
+                row = DATA_START_ROW
+            ws.cell(row, 1, lid)
+            ws.cell(row, 3, title)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p1 = Path(tmp) / "new.xlsx"
+            p2 = Path(tmp) / "photo.xlsx"
+            out = Path(tmp) / "merged.xlsx"
+            wb1 = Workbook()
+            _row(wb1, "md_1", "New")
+            save_workbook(wb1, p1)
+            wb2 = Workbook()
+            _row(wb2, "md_2", "Photo update")
+            save_workbook(wb2, p2)
+            total = merge_autoload_feed_workbooks([p1, p2], out)
+            self.assertEqual(total, 2)
 
 
 class TestAvitoApiExtensions(unittest.TestCase):

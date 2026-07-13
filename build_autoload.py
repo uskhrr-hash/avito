@@ -16,6 +16,7 @@ from avito.autoload import (
     avito_ids_for_posting,
     fill_autoload_template,
     filter_new_listings_workbook,
+    filter_photo_updates_workbook,
     load_avito_ids,
     load_posting,
     resolve_autoload_base,
@@ -256,6 +257,21 @@ def main() -> int:
             kept,
             removed_existing,
             new_feed_path,
+        )
+
+    photo_updates_path = cfg.photo_updates_feed
+    if photo_updates_path:
+        if not photo_updates_path.is_absolute():
+            photo_updates_path = ROOT / photo_updates_path
+        photo_kept, photo_removed = filter_photo_updates_workbook(
+            working_path,
+            photo_updates_path,
+            avito_ids=avito_ids,
+        )
+        LOG.info(
+            "Фид обновления фото (уже на Avito): %s строк → %s",
+            photo_kept,
+            photo_updates_path,
         )
 
     removed = stats.pop("removed_rows", [])

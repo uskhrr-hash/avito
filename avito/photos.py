@@ -22,6 +22,7 @@ from avito.yandex_disk_api import YandexDiskDownloadUrls, disk_resource_path
 __all__ = [
     "normalize_yandex_photo_urls",
     "is_avito_hosted_photo_urls",
+    "photo_urls_look_like_article",
 ]
 
 
@@ -481,6 +482,25 @@ def is_avito_hosted_photo_urls(text: str) -> bool:
         for part in str(text).split("|")
         if part.strip()
     )
+
+
+def photo_urls_look_like_article(photos: str, article: str) -> bool:
+    """Ссылки ведут на фото артикула (не модель, не CDN Авито)."""
+    text = str(photos or "").strip()
+    art = str(article or "").strip()
+    if not text or not art or is_avito_hosted_photo_urls(text):
+        return False
+    low = text.lower()
+    a = art.lower()
+    markers = (
+        f"/{a}.",
+        f"/{a}-",
+        f"md{a}",
+        f"pg{a}",
+        f"sc{a}",
+        f"/{a}/",
+    )
+    return any(m in low for m in markers)
 
 
 def yandex_disk_urls_from_files(

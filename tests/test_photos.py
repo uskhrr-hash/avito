@@ -12,6 +12,7 @@ from avito.photos import (
     discover_prefixed_photos,
     model_photo_label,
     newest_file_mtime,
+    photo_urls_look_like_article,
     prefixed_stem_variants,
     resolve_listing_photo_sets,
     select_store_when_conflict,
@@ -254,6 +255,18 @@ class TestPhotos(unittest.TestCase):
             self.assertEqual(len(found), 1)
             self.assertEqual(found[0].suffix.lower(), ".jpg")
             self.assertTrue(found[0].is_file())
+
+    def test_photo_urls_look_like_article(self):
+        url = "https://avito.shinaufa.ru/photos/md/md149898-1.jpg"
+        self.assertTrue(photo_urls_look_like_article(url, "149898"))
+        self.assertFalse(photo_urls_look_like_article(url, "99999"))
+        model = "https://avito.shinaufa.ru/photos/Yokohama Geolandar G015.jpg"
+        self.assertFalse(photo_urls_look_like_article(model, "149898"))
+        avito_cdn = (
+            "https://avito.ru/autoload/1/items/2/image/3"
+            " | https://example.com/md149898-1.jpg"
+        )
+        self.assertFalse(photo_urls_look_like_article(avito_cdn, "149898"))
 
 
 if __name__ == "__main__":

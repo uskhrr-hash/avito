@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from avito.photos import (
     build_store_photo_urls,
     is_avito_hosted_photo_urls,
     normalize_yandex_photo_urls,
+    photo_urls_look_like_article,
     resolve_listing_photo_sets,
 )
 from avito.yandex_disk_api import YandexDiskDownloadUrls, load_yandex_oauth_token
@@ -1739,6 +1741,120 @@ def filter_new_listings_workbook(
         saved.name,
     )
     return kept, len(to_delete)
+
+
+def filter_photo_updates_workbook(
+    source_path: Path,
+    output_path: Path,
+    *,
+    avito_ids: dict[str, str],
+) -> tuple[int, int]:
+    """
+    Уже на Avito + фото артикула в файле → отдельный фид для обновления (без дублей).
+
+    Строка должна иметь AvitoId и URL с артикулом (не фото модели / CDN Авито).
+    """
+    wb = load_workbook(source_path)
+    sheet_name = _find_data_sheet(wb)
+    ws = wb[sheet_name]
+    headers = _header_map(ws)
+    c_id = _col(headers, "Уникальный идентификатор объявления")
+    c_avito = _col(headers, "Номер объявления на Авито")
+    c_title = _col(headers, "Название объявления")
+    c_photos = _col(headers, "Ссылки на фото")
+
+    to_delete: list[int] = []
+    kept = 0
+    for row_idx in range(DATA_START_ROW, ws.max_row + 1):
+        title = str(ws.cell(row_idx, c_title).value or "").strip() if c_title else ""
+        listing_id = normalize_article_id(ws.cell(row_idx, c_id).value if c_id else None)
+        if not title and not listing_id:
+            continue
+        if not _row_has_avito_id(ws, row_idx, c_id=c_id, c_avito=c_avito, avito_ids=avito_ids):
+            to_delete.append(row_idx)
+            continue
+        article = _article_from_listing_id(listing_id) if listing_id else ""
+        photos = str(ws.cell(row_idx, c_photos).value or "").strip() if c_photos else ""
+        if not photo_urls_look_like_article(photos, article):
+            to_delete.append(row_idx)
+            continue
+        kept += 1
+
+    for row_idx in sorted(to_delete, reverse=True):
+        ws.delete_rows(row_idx, 1)
+
+    saved = save_workbook(wb, output_path)
+    LOG.info(
+        "Фид обновления фото: %s строк (уже на Avito + фото артикула) → %s",
+        kept,
+        saved.name,
+    )
+    return kept, len(to_delete)
+
+
+def merge_autoload_feed_workbooks(
+    sources: list[Path],
+    output_path: Path,
+) -> int:
+    """Склеить несколько xlsx одного шаблона в один фид (строки данных подряд)."""
+    paths = [p for p in sources if p.is_file()]
+    if not paths:
+        return 0
+    shutil.copy2(paths[0], output_path)
+    if len(paths) == 1:
+        wb = load_workbook(output_path, read_only=True, data_only=True)
+        try:
+            ws = wb[_find_data_sheet(wb)]
+            headers = _header_map(ws)
+            c_title = _col(headers, "Название объявления")
+            c_id = _col(headers, "Уникальный идентификатор объявления")
+            count = 0
+            for row_idx in range(DATA_START_ROW, ws.max_row + 1):
+                title = str(ws.cell(row_idx, c_title).value or "").strip() if c_title else ""
+                lid = normalize_article_id(ws.cell(row_idx, c_id).value if c_id else None)
+                if title or lid:
+                    count += 1
+            return count
+        finally:
+            wb.close()
+
+    wb = load_workbook(output_path)
+    sheet_name = _find_data_sheet(wb)
+    ws = wb[sheet_name]
+    headers = _header_map(ws)
+    c_title = _col(headers, "Название объявления")
+    c_id = _col(headers, "Уникальный идентификатор объявления")
+    max_col = ws.max_column
+    last = DATA_START_ROW - 1
+    for row_idx in range(DATA_START_ROW, ws.max_row + 1):
+        title = str(ws.cell(row_idx, c_title).value or "").strip() if c_title else ""
+        lid = normalize_article_id(ws.cell(row_idx, c_id).value if c_id else None)
+        if title or lid:
+            last = row_idx
+    next_row = last + 1
+    total = last - DATA_START_ROW + 1
+
+    for path in paths[1:]:
+        wb2 = load_workbook(path, read_only=True, data_only=True)
+        try:
+            ws2 = wb2[_find_data_sheet(wb2)]
+            h2 = _header_map(ws2)
+            c_title2 = _col(h2, "Название объявления")
+            c_id2 = _col(h2, "Уникальный идентификатор объявления")
+            for row_idx in range(DATA_START_ROW, ws2.max_row + 1):
+                title = str(ws2.cell(row_idx, c_title2).value or "").strip() if c_title2 else ""
+                lid = normalize_article_id(ws2.cell(row_idx, c_id2).value if c_id2 else None)
+                if not title and not lid:
+                    continue
+                for col in range(1, max_col + 1):
+                    ws.cell(next_row, col, ws2.cell(row_idx, col).value)
+                next_row += 1
+                total += 1
+        finally:
+            wb2.close()
+
+    save_workbook(wb, output_path)
+    return total
 
 
 _DEFAULT_HEADER_ALIASES = {

@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from avito.photo_upload.guide import render_guide_html
-from avito.photo_upload.overlays import EXAMPLE_FILES, overlay_svg_for_shot, shot_label
+from avito.photo_upload.overlays import EXAMPLE_FILES, ghost_image_for_shot, overlay_svg_for_shot, shot_label
 from avito.photo_upload.service import (
     load_no_photos_queue_info,
     lookup_stock,
@@ -74,6 +74,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 "short": meta["short"],
                 "overlay_svg": overlay_svg_for_shot(idx, camera=True),
                 "example_url": EXAMPLE_FILES.get(idx, ""),
+                "ghost_url": ghost_image_for_shot(idx),
             }
         )
 
@@ -315,7 +316,7 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
   <base href="{base}">
   <title>Фото — {store.label}</title>
   <link rel="stylesheet" href="static/app.css">
-  <link rel="stylesheet" href="static/camera.css?v=3">
+  <link rel="stylesheet" href="static/camera.css?v=4">
 </head>
 <body class="page-app">
   <header class="topbar">
@@ -399,6 +400,6 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
   </div>
 
   <script>window.PHOTO_UPLOAD_SESSION = {store_json};</script>
-  <script src="static/app.js?v=3"></script>
+  <script src="static/app.js?v=4"></script>
 </body>
 </html>"""

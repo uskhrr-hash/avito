@@ -1,7 +1,13 @@
 """Публичная страница стандарта съёмки фото для продавцов."""
 from __future__ import annotations
 
-from avito.photo_upload.overlays import EXAMPLE_FILES, SHOT_LABELS, overlay_svg_for_shot
+from avito.photo_upload.overlays import (
+    EXAMPLE_FILES,
+    REAL_EXAMPLE_SHOTS,
+    SHOT_LABELS,
+    ghost_image_for_shot,
+    overlay_svg_for_shot,
+)
 
 
 def render_guide_html(*, base: str) -> str:
@@ -33,8 +39,8 @@ def render_guide_html(*, base: str) -> str:
       <h1>Как снимать шины одинаково</h1>
       <p class="lead">
         На каждый артикул нужно <strong>4 фото</strong> в одном порядке.
-        Снимайте как на эталонах ниже — в приложении загрузки при съёмке
-        появится такой же контур.
+        Снимайте как на эталонах ниже — при съёмке в камере
+        появится полупрозрачный эталон для выравнивания.
       </p>
       <ol class="guide-order">
         <li><strong>Фото 1</strong> — стопка: 3 шины лежат, 4-я стоит сверху</li>
@@ -78,6 +84,11 @@ def _guide_card(index: int, base_href: str) -> str:
     meta = SHOT_LABELS[index]
     example = EXAMPLE_FILES[index]
     checklist = _checklist_for_shot(index)
+    overlay_block = ""
+    if index not in REAL_EXAMPLE_SHOTS:
+        overlay_block = f"""        <div class="guide-example-overlay" aria-hidden="true">
+          {overlay_svg_for_shot(index, camera=True)}
+        </div>"""
     return f"""    <section class="guide-card card">
       <div class="guide-card-head">
         <span class="guide-num">{index}</span>
@@ -87,10 +98,8 @@ def _guide_card(index: int, base_href: str) -> str:
         </div>
       </div>
       <div class="guide-example">
-        <img src="{example}?v=2" alt="Эталон: {meta["title"]}" loading="lazy">
-        <div class="guide-example-overlay" aria-hidden="true">
-          {overlay_svg_for_shot(index, camera=True)}
-        </div>
+        <img src="{example}?v=3" alt="Эталон: {meta["title"]}" loading="lazy">
+{overlay_block}
       </div>
       <ul class="guide-checklist">
 {checklist}

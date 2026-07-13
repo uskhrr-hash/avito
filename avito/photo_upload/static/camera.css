@@ -46,6 +46,7 @@
   object-fit: cover;
   display: block;
   background: #111;
+  z-index: 0;
 }
 
 .camera-overlay {
@@ -55,6 +56,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  z-index: 3;
 }
 
 .camera-overlay .guide-svg {
@@ -72,6 +74,20 @@
   border-radius: 8px;
   border: 2px solid rgba(255, 255, 255, 0.85);
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  z-index: 2;
+}
+
+.camera-example.camera-ghost {
+  inset: 0;
+  right: auto;
+  bottom: auto;
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  opacity: 0.48;
+  z-index: 1;
 }
 
 .camera-example.hidden {

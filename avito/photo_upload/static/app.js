@@ -323,11 +323,22 @@
     cameraTitle.textContent = "Фото " + index;
     cameraHint.textContent = guide.hint || guide.title;
     cameraOverlay.innerHTML = guide.overlay_svg || "";
-    if (guide.example_url && cameraExample) {
-      cameraExample.src = guide.example_url;
-      cameraExample.classList.remove("hidden");
-    } else if (cameraExample) {
-      cameraExample.classList.add("hidden");
+    if (cameraExample) {
+      const ghost = guide.ghost_url || "";
+      if (ghost) {
+        cameraExample.src = ghost + (ghost.indexOf("?") >= 0 ? "&" : "?") + "v=3";
+        cameraExample.classList.remove("hidden");
+        cameraExample.classList.add("camera-ghost");
+        if (cameraHint) {
+          cameraHint.textContent = "Совместите кадр с полупрозрачным эталоном";
+        }
+      } else if (guide.example_url) {
+        cameraExample.src = guide.example_url;
+        cameraExample.classList.remove("hidden", "camera-ghost");
+      } else {
+        cameraExample.classList.add("hidden");
+        cameraExample.classList.remove("camera-ghost");
+      }
     }
   }
 

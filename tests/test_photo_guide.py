@@ -1,7 +1,12 @@
 import unittest
 
 from avito.photo_upload.guide import render_guide_html
-from avito.photo_upload.overlays import overlay_svg_for_shot, shot_label
+from avito.photo_upload.overlays import (
+    EXAMPLE_FILES,
+    ghost_image_for_shot,
+    overlay_svg_for_shot,
+    shot_label,
+)
 
 
 class TestPhotoGuide(unittest.TestCase):
@@ -15,9 +20,11 @@ class TestPhotoGuide(unittest.TestCase):
     def test_shot_labels_and_overlays(self):
         meta = shot_label(3)
         self.assertIn("Страна", meta["title"])
+        self.assertEqual(ghost_image_for_shot(1), EXAMPLE_FILES[1])
+        self.assertEqual(ghost_image_for_shot(2), "")
+        self.assertEqual(overlay_svg_for_shot(1, camera=True), "")
         svg = overlay_svg_for_shot(4, camera=True)
         self.assertIn("guide-svg", svg)
-        self.assertIn("opacity:0.92", svg)
 
 
 if __name__ == "__main__":

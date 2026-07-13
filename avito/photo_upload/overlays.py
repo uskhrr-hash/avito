@@ -31,6 +31,9 @@ EXAMPLE_FILES: dict[int, str] = {
     4: "static/guide/examples/04-dot.jpg",
 }
 
+# Кадры с реальным эталоном: в камере — полупрозрачный ghost, не SVG-схема.
+REAL_EXAMPLE_SHOTS: frozenset[int] = frozenset({1})
+
 
 def shot_label(index: int) -> dict[str, str]:
     if index in SHOT_LABELS:
@@ -43,10 +46,12 @@ def shot_label(index: int) -> dict[str, str]:
 
 
 def overlay_svg_for_shot(index: int, *, camera: bool = False) -> str:
-    """Контур поверх кадра. camera=True — полупрозрачный оверлей для live preview."""
+    """Контур поверх кадра. Для реальных эталонов в камере — пусто (используется ghost)."""
+    if camera and index in REAL_EXAMPLE_SHOTS:
+        return ""
     opacity = "0.92" if camera else "1"
     if index == 1:
-        return _svg_stack(opacity=opacity)
+        return _svg_stack(opacity=opacity, camera=camera)
     if index == 2:
         return _svg_tread(opacity=opacity)
     if index == 3:
@@ -56,7 +61,36 @@ def overlay_svg_for_shot(index: int, *, camera: bool = False) -> str:
     return _svg_generic(opacity=opacity)
 
 
-def _svg_stack(*, opacity: str) -> str:
+def ghost_image_for_shot(index: int) -> str:
+    """URL полупрозрачного эталона для выравнивания в камере."""
+    if index in REAL_EXAMPLE_SHOTS:
+        return EXAMPLE_FILES.get(index, "")
+    return ""
+
+
+def _svg_stack(*, opacity: str, camera: bool = False) -> str:
+    """Портретный контур: 3 шины лежат внизу, 4-я стоит вертикально."""
+    if camera:
+        return f"""<svg viewBox="0 0 100 100" class="guide-svg camera-overlay-svg" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="vignette" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#000" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#000" stop-opacity="0.35"/>
+    </linearGradient>
+  </defs>
+  <rect width="100" height="100" fill="url(#vignette)"/>
+  <!-- 3 шины лежат (стопка сбоку) -->
+  <ellipse cx="50" cy="86" rx="34" ry="5.5" fill="none" stroke="#93c5fd" stroke-width="0.55"/>
+  <ellipse cx="50" cy="81" rx="33" ry="5" fill="none" stroke="#93c5fd" stroke-width="0.55"/>
+  <ellipse cx="50" cy="76" rx="32" ry="4.8" fill="none" stroke="#93c5fd" stroke-width="0.55"/>
+  <path d="M18 76 Q18 88 50 88 Q82 88 82 76" fill="none" stroke="#60a5fa" stroke-width="0.45" stroke-dasharray="2 1.5"/>
+  <!-- 4-я шина стоит вертикально -->
+  <ellipse cx="50" cy="30" rx="28" ry="8.5" fill="none" stroke="#2563eb" stroke-width="0.75"/>
+  <path d="M22 30 Q22 72 50 74 Q78 72 78 30" fill="none" stroke="#2563eb" stroke-width="0.75"/>
+  <ellipse cx="50" cy="73" rx="28" ry="7.5" fill="none" stroke="#2563eb" stroke-width="0.75"/>
+  <rect x="20" y="22" width="60" height="56" rx="4" fill="none" stroke="#fff" stroke-width="0.5" stroke-dasharray="3 2" opacity="0.9"/>
+  <text x="50" y="10" text-anchor="middle" font-size="4.2" fill="#fff" font-family="system-ui,sans-serif" font-weight="700">3 лежат + 1 сверху</text>
+</svg>"""
     return f"""<svg viewBox="0 0 320 220" class="guide-svg" xmlns="http://www.w3.org/2000/svg" style="opacity:{opacity}">
   <rect width="320" height="220" fill="none"/>
   <rect x="8" y="8" width="304" height="204" rx="12" fill="none" stroke="#fff" stroke-width="3" stroke-dasharray="10 8" opacity="0.85"/>

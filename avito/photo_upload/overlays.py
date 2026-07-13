@@ -5,7 +5,7 @@ SHOT_LABELS: dict[int, dict[str, str]] = {
     1: {
         "title": "Стопка шин",
         "short": "стопка",
-        "hint": "4-я шина на стопке из 3-х",
+        "hint": "3 шины лежат, 4-я стоит сверху",
     },
     2: {
         "title": "Протектор крупно",
@@ -71,7 +71,7 @@ def _svg_stack(*, opacity: str) -> str:
     <rect x="-46" y="-18" width="92" height="58" rx="8" fill="none" stroke="#2563eb" stroke-width="4"/>
     <ellipse cx="0" cy="-18" rx="46" ry="14" fill="none" stroke="#2563eb" stroke-width="4"/>
   </g>
-  <text x="160" y="28" text-anchor="middle" font-size="14" fill="#fff" font-family="system-ui,sans-serif" font-weight="700">4-я шина на стопке</text>
+  <text x="160" y="28" text-anchor="middle" font-size="14" fill="#fff" font-family="system-ui,sans-serif" font-weight="700">3 лежат + 1 сверху</text>
 </svg>"""
 
 

@@ -17,7 +17,7 @@ def render_guide_html(*, base: str) -> str:
   <base href="{base_href}">
   <title>Стандарт фото шин — Avito</title>
   <link rel="stylesheet" href="static/app.css">
-  <link rel="stylesheet" href="static/guide.css">
+  <link rel="stylesheet" href="static/guide.css?v=2">
 </head>
 <body class="page-guide">
   <header class="topbar">
@@ -37,7 +37,7 @@ def render_guide_html(*, base: str) -> str:
         появится такой же контур.
       </p>
       <ol class="guide-order">
-        <li><strong>Фото 1</strong> — стопка шин</li>
+        <li><strong>Фото 1</strong> — стопка: 3 шины лежат, 4-я стоит сверху</li>
         <li><strong>Фото 2</strong> — протектор крупно</li>
         <li><strong>Фото 3</strong> — страна производства</li>
         <li><strong>Фото 4</strong> — год выпуска (DOT)</li>
@@ -87,7 +87,7 @@ def _guide_card(index: int, base_href: str) -> str:
         </div>
       </div>
       <div class="guide-example">
-        <img src="{example}" alt="Эталон: {meta["title"]}" loading="lazy">
+        <img src="{example}?v=2" alt="Эталон: {meta["title"]}" loading="lazy">
         <div class="guide-example-overlay" aria-hidden="true">
           {overlay_svg_for_shot(index, camera=True)}
         </div>
@@ -101,7 +101,7 @@ def _guide_card(index: int, base_href: str) -> str:
 def _checklist_for_shot(index: int) -> str:
     items: dict[int, list[tuple[str, str]]] = {
         1: [
-            ("ok", "Три шины в ряд, четвёртая сверху"),
+            ("ok", "Три шины лежат, четвёртая стоит сверху"),
             ("ok", "Шины занимают большую часть кадра"),
             ("ok", "Чистый фон"),
             ("bad", "Не снимать одну шину без комплекта"),

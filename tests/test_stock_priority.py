@@ -14,11 +14,12 @@ class TestStockPriority(unittest.TestCase):
         self.cfg = StockPriorityConfig()
 
     def test_seller_star_source(self):
+        self.assertTrue(is_seller_star_source("google"))
+        self.assertTrue(is_seller_star_source("p1"))
         self.assertTrue(is_seller_star_source("db:p2"))
         self.assertTrue(is_seller_star_source("db:p3"))
         self.assertTrue(is_seller_star_source("db:p4"))
         self.assertFalse(is_seller_star_source("db:p5"))
-        self.assertFalse(is_seller_star_source("google"))
         self.assertFalse(is_seller_star_source("db:p6"))
 
     def test_p2_ufa_and_ushk(self):

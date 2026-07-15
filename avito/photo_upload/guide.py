@@ -90,7 +90,7 @@ def _guide_card(index: int, base_href: str) -> str:
         </div>
       </div>
       <div class="guide-example">
-        <img src="{example}?v=3" alt="Эталон: {meta["title"]}" loading="lazy">
+        <img src="{example}?v=4" alt="Эталон: {meta["title"]}" loading="lazy">
 {overlay_block}
       </div>
       <ul class="guide-checklist">

@@ -201,7 +201,13 @@ def _run_api_sync(app, config_path: Path, *, dry_run: bool) -> int:
     )
     for err in stats.errors[:10]:
         LOG.warning("%s", err)
-    return 1 if stats.prices_failed or stats.stocks_failed else 0
+    if stats.prices_failed or stats.stocks_failed:
+        LOG.warning(
+            "API sync: частичные ошибки (цены fail=%s, остатки fail=%s) — пайплайн не останавливаем",
+            stats.prices_failed,
+            stats.stocks_failed,
+        )
+    return 0
 
 
 def main() -> int:

@@ -158,6 +158,17 @@ def _qty_str(value: float) -> str:
     return str(value)
 
 
+SELLER_STAR_PRIORITIES = frozenset({"p2", "p3", "p4"})
+
+
+def is_seller_star_source(source: str) -> bool:
+    """П2–П4: визуальная метка * для продавцов на сайте загрузки фото."""
+    s = str(source or "").strip()
+    if not s.startswith("db:"):
+        return False
+    return s[3:] in SELLER_STAR_PRIORITIES
+
+
 def resolve_register_article(
     article: str,
     name: str,

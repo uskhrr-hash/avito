@@ -274,6 +274,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 "article": item.article,
                 "nomenclature": item.nomenclature,
                 "quantity": item.quantity,
+                "star": item.star,
             }
         )
 
@@ -287,6 +288,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                     "article": r.article,
                     "nomenclature": r.nomenclature,
                     "quantity": r.quantity,
+                    "star": r.star,
                 }
                 for r in rows
             ]
@@ -328,6 +330,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                         "nomenclature": r.nomenclature,
                         "stores": r.stores,
                         "problem": r.problem,
+                        "star": r.star,
                     }
                     for r in result.items
                 ],
@@ -820,6 +823,6 @@ def _app_html(runtime: PhotoUploadRuntime, ident: SessionIdentity) -> str:
   </div>
 
   <script>window.PHOTO_UPLOAD_SESSION = {store_json};</script>
-  <script src="static/app.js?v=6"></script>
+  <script src="static/app.js?v=7"></script>
 </body>
 </html>"""

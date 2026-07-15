@@ -14,6 +14,7 @@ from avito.compare import load_stock
 from avito.manager_inbox import photo_filename, photo_relative_path, photo_target_path
 from avito.photo_convert import compress_image_in_place, convert_image_to_jpeg
 from avito.photo_upload.settings import PhotoUploadRuntime
+from avito.stock_priority import is_seller_star_source
 from avito.store_registry import fetch_articles_at_supplier
 
 LOG = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ class StockItem:
     article: str
     nomenclature: str
     quantity: str
+    star: bool = False
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,7 @@ class NoPhotoItem:
     nomenclature: str
     stores: str
     problem: str
+    star: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,10 +73,15 @@ def _stock_items(runtime: PhotoUploadRuntime) -> list[StockItem]:
             article=str(r.article).strip(),
             nomenclature=str(r.nomenclature).strip(),
             quantity=str(r.quantity).strip(),
+            star=is_seller_star_source(r.source),
         )
         for r in rows
         if str(r.article).strip()
     ]
+
+
+def _starred_articles(runtime: PhotoUploadRuntime) -> frozenset[str]:
+    return frozenset(row.article for row in _stock_items(runtime) if row.star)
 
 
 def lookup_stock(runtime: PhotoUploadRuntime, article: str) -> StockItem | None:
@@ -210,6 +218,8 @@ def load_no_photos_queue(
         else:
             return []
 
+    starred = _starred_articles(runtime)
+
     out: list[NoPhotoItem] = []
     with path.open(encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -228,6 +238,7 @@ def load_no_photos_queue(
                     nomenclature=str(row.get("номенклатура", "")).strip(),
                     stores=str(row.get("магазины", "")).strip(),
                     problem=str(row.get("проблема", "")).strip(),
+                    star=article in starred,
                 )
             )
             if len(out) >= limit:

@@ -70,6 +70,10 @@
     return /^\d{4,}$/.test(article);
   }
 
+  function formatArticleLabel(article, star) {
+    return star ? article + " *" : article;
+  }
+
   function storePrefix() {
     const session = window.PHOTO_UPLOAD_SESSION || {};
     return session.prefix || "md";
@@ -174,7 +178,11 @@
         button.type = "button";
         button.className = "pick-item";
         button.innerHTML =
-          "<strong>" + row.article + "</strong><span>" + row.nomenclature + "</span>";
+          "<strong>" +
+          formatArticleLabel(row.article, row.star) +
+          "</strong><span>" +
+          row.nomenclature +
+          "</span>";
         button.addEventListener("click", function () {
           articleInput.value = row.article;
           searchResults.classList.add("hidden");
@@ -579,7 +587,11 @@
         button.type = "button";
         button.className = "queue-item";
         button.innerHTML =
-          "<strong>" + row.article + "</strong><span>" + row.nomenclature + "</span>";
+          "<strong>" +
+          formatArticleLabel(row.article, row.star) +
+          "</strong><span>" +
+          row.nomenclature +
+          "</span>";
         button.addEventListener("click", function () {
           articleInput.value = row.article;
           if (searchResults) searchResults.classList.add("hidden");

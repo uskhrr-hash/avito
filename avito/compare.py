@@ -10,6 +10,7 @@ from avito.config import CompareSettings
 from avito.stock_sources import (
     GOODS_COLUMN_COUNT,
     GOODS_SAM_MB_CASH_COLUMN_INDEX,
+    GOODS_SOURCE_COLUMN_INDEX,
     GOODS_USHK_COLUMN_INDEX,
     is_legacy_goods_format,
     _parse_ushk_cell,
@@ -33,6 +34,7 @@ class StockRow:
     avito_price: float | None = None
     ushk_in_stock: bool = False
     sam_mb_cash_price: bool = False
+    source: str = ""
 
 
 def _parse_incoming(value) -> float | None:
@@ -100,6 +102,9 @@ def load_stock(path: Path, cfg: CompareSettings) -> list[StockRow]:
             ("количество", "кол-во", "остаток", "qty"),
             required=False,
         )
+        source_col = _resolve_column(
+            df.columns, "source", ("source", "источник", "приоритет"), required=False
+        )
         for _, r in df.iterrows():
             nom = str(r.get(nom_col, "") or "").strip()
             if not nom or nom.lower() in ("nan", "номенклатура"):
@@ -109,12 +114,14 @@ def load_stock(path: Path, cfg: CompareSettings) -> list[StockRow]:
                 continue
             article = str(r.get(art_col, "") or "").strip() if art_col else ""
             qty = str(r.get(qty_col, "") or "").strip() if qty_col else ""
+            source = str(r.get(source_col, "") or "").strip() if source_col else ""
             rows.append(
                 StockRow(
                     article=_clean_article(article),
                     nomenclature=nom,
                     incoming=incoming,
                     quantity=qty,
+                    source=source,
                 )
             )
         return rows
@@ -148,6 +155,9 @@ def load_stock(path: Path, cfg: CompareSettings) -> list[StockRow]:
         sam_mb_cash_price = False
         if len(r) > GOODS_SAM_MB_CASH_COLUMN_INDEX:
             sam_mb_cash_price = _parse_ushk_cell(r.iloc[GOODS_SAM_MB_CASH_COLUMN_INDEX])
+        source = ""
+        if len(r) > GOODS_SOURCE_COLUMN_INDEX:
+            source = str(r.iloc[GOODS_SOURCE_COLUMN_INDEX] or "").strip()
         rows.append(
             StockRow(
                 article=_clean_article(article),
@@ -157,6 +167,7 @@ def load_stock(path: Path, cfg: CompareSettings) -> list[StockRow]:
                 avito_price=avito_price,
                 ushk_in_stock=ushk_in_stock,
                 sam_mb_cash_price=sam_mb_cash_price,
+                source=source,
             )
         )
     return rows

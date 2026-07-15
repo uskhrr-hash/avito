@@ -3,6 +3,7 @@ import unittest
 from avito.stock_priority import (
     RegisterLine,
     StockPriorityConfig,
+    is_seller_star_source,
     resolve_register_article,
     resolve_register_stock,
 )
@@ -11,6 +12,14 @@ from avito.stock_priority import (
 class TestStockPriority(unittest.TestCase):
     def setUp(self) -> None:
         self.cfg = StockPriorityConfig()
+
+    def test_seller_star_source(self):
+        self.assertTrue(is_seller_star_source("db:p2"))
+        self.assertTrue(is_seller_star_source("db:p3"))
+        self.assertTrue(is_seller_star_source("db:p4"))
+        self.assertFalse(is_seller_star_source("db:p5"))
+        self.assertFalse(is_seller_star_source("google"))
+        self.assertFalse(is_seller_star_source("db:p6"))
 
     def test_p2_ufa_and_ushk(self):
         lines = [

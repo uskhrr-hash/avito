@@ -7,6 +7,7 @@ from PIL import Image
 
 from avito.manager_inbox import photo_relative_path, photo_target_path
 from avito.photo_upload.service import (
+    lookup_stock,
     next_photo_index,
     pending_photo_meta,
     save_uploaded_photo,
@@ -107,13 +108,27 @@ photo_upload:
         )
 
         import pandas as pd
+        from avito.stock_sources import StockRow, write_goods_xlsx
 
-        pd.DataFrame(
+        write_goods_xlsx(
+            stock,
             [
-                ["124889", "Test Tire 205/55 R16", "4", "5000"],
-                ["103918", "Another Tire", "2", "4000"],
-            ]
-        ).to_excel(stock, index=False, header=False)
+                StockRow(
+                    article="124889",
+                    name="Test Tire 205/55 R16",
+                    quantity="4",
+                    price=5000,
+                    source="db:p2",
+                ),
+                StockRow(
+                    article="103918",
+                    name="Another Tire",
+                    quantity="2",
+                    price=4000,
+                    source="db:p5",
+                ),
+            ],
+        )
 
         (output / "autoload_no_photos_2026-07-10.csv").write_text(
             "артикул,номенклатура,магазины,проблема\n"
@@ -167,6 +182,28 @@ photo_upload:
                 in_store_articles=frozenset({"999999", "124889"}),
             )
             self.assertEqual({r.article for r in result.items}, {"999999", "124889"})
+
+    def test_stock_star_for_p2_p3_p4(self):
+        with tempfile.TemporaryDirectory() as tmp_name:
+            runtime = self._runtime(Path(tmp_name))
+            starred = lookup_stock(runtime, "124889")
+            self.assertIsNotNone(starred)
+            assert starred is not None
+            self.assertTrue(starred.star)
+            plain = lookup_stock(runtime, "103918")
+            self.assertIsNotNone(plain)
+            assert plain is not None
+            self.assertFalse(plain.star)
+
+    def test_no_photos_queue_star_flag(self):
+        with tempfile.TemporaryDirectory() as tmp_name:
+            runtime = self._runtime(Path(tmp_name))
+            from avito.photo_upload.service import load_no_photos_queue_info
+
+            result = load_no_photos_queue_info(runtime, store_prefix="md")
+            by_art = {r.article: r.star for r in result.items}
+            self.assertTrue(by_art["124889"])
+            self.assertFalse(by_art["103918"])
 
     def test_contributor_ushk_in_db(self):
         with tempfile.TemporaryDirectory() as tmp_name:

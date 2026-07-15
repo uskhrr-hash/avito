@@ -111,6 +111,7 @@ class PhotoUploadSettings:
     contributors_prefix: str
     points_per_photo: int
     contributor_max_photos: int
+    contributor_shops: tuple[str, ...] = ()
 
 
 @dataclass
@@ -432,6 +433,10 @@ def _load_photo_upload(raw: dict) -> PhotoUploadSettings:
         mount = f"/{mount}"
     db_raw = str(raw.get("db_path", "data/photo_upload.db")).strip() or "data/photo_upload.db"
     contrib = str(raw.get("contributors_prefix", "contributors")).strip() or "contributors"
+    shops_raw = raw.get("contributor_shops") or []
+    shops = tuple(
+        str(x).strip() for x in shops_raw if str(x).strip()
+    )
     return PhotoUploadSettings(
         enabled=bool(raw.get("enabled", False)),
         host=str(raw.get("host", "127.0.0.1")),
@@ -443,4 +448,5 @@ def _load_photo_upload(raw: dict) -> PhotoUploadSettings:
         contributors_prefix=contrib,
         points_per_photo=max(0, int(raw.get("points_per_photo", 10))),
         contributor_max_photos=max(1, int(raw.get("contributor_max_photos", 10))),
+        contributor_shops=shops,
     )

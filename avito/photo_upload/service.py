@@ -125,11 +125,14 @@ def load_no_photos_queue_info(
     limit: int = 80,
     in_store_only: bool = False,
     in_store_articles: frozenset[str] | None = None,
+    ushk_supplier: str | None = None,
 ) -> NoPhotosQueueResult:
     path = _latest_no_photos_csv(runtime)
     prefix = store_prefix.strip()
-    store = runtime.stores_config.get(prefix)
-    ushk_name = store.ushk_supplier if store else None
+    store = runtime.stores_config.get(prefix) if prefix else None
+    ushk_name = (ushk_supplier or "").strip() or (
+        store.ushk_supplier if store else None
+    )
 
     if path is None:
         return NoPhotosQueueResult(
@@ -142,7 +145,11 @@ def load_no_photos_queue_info(
         return NoPhotosQueueResult(
             [],
             path.name,
-            f"Для магазина {prefix} не задан ushk_supplier в stores.yaml",
+            (
+                f"Для магазина {prefix} не задан ushk_supplier в stores.yaml"
+                if prefix
+                else "У сотрудника не указан магазин (склад УШК)"
+            ),
         )
 
     items = load_no_photos_queue(
@@ -151,6 +158,7 @@ def load_no_photos_queue_info(
         limit=limit,
         in_store_only=in_store_only,
         in_store_articles=in_store_articles,
+        ushk_supplier=ushk_name,
     )
 
     if not items:
@@ -160,10 +168,16 @@ def load_no_photos_queue_info(
                 path.name,
                 f"Нет позиций без фото, которые есть на {ushk_name} (реестр, от 4 шт)",
             )
+        if prefix:
+            return NoPhotosQueueResult(
+                [],
+                path.name,
+                f"Для магазина {prefix} в {path.name} нет позиций (или всё уже снято)",
+            )
         return NoPhotosQueueResult(
             [],
             path.name,
-            f"Для магазина {prefix} в {path.name} нет позиций (или всё уже снято)",
+            f"В {path.name} нет позиций без фото",
         )
     return NoPhotosQueueResult(items, path.name, "")
 
@@ -175,13 +189,16 @@ def load_no_photos_queue(
     limit: int = 80,
     in_store_only: bool = False,
     in_store_articles: frozenset[str] | None = None,
+    ushk_supplier: str | None = None,
 ) -> list[NoPhotoItem]:
     path = _latest_no_photos_csv(runtime)
     if path is None:
         return []
     prefix = store_prefix.strip().lower()
-    store = runtime.stores_config.get(store_prefix.strip())
-    ushk_name = store.ushk_supplier if store else None
+    store = runtime.stores_config.get(store_prefix.strip()) if store_prefix.strip() else None
+    ushk_name = (ushk_supplier or "").strip() or (
+        store.ushk_supplier if store else None
+    )
 
     registry: frozenset[str] | None = None
     if in_store_only:

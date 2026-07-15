@@ -52,6 +52,7 @@ class SessionIdentity:
     label: str
     user_id: int | None = None
     points_balance: int | None = None
+    ushk_supplier: str = ""
 
 
 def _verify_store_password(store: StoreLogin, password: str) -> bool:
@@ -92,6 +93,7 @@ def _current_identity(
                 label=user.display_name or user.login,
                 user_id=uid,
                 points_balance=balance,
+                ushk_supplier=user.ushk_supplier,
             )
         return SessionIdentity(
             role=ROLE_ADMIN,
@@ -254,6 +256,10 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
             payload["points_balance"] = ident.points_balance
             payload["points_per_photo"] = runtime.points_per_photo
             payload["max_photos"] = runtime.contributor_max_photos
+            payload["ushk_supplier"] = ident.ushk_supplier
+        elif ident.role == ROLE_STORE:
+            store = next((s for s in runtime.stores if s.prefix == ident.prefix), None)
+            payload["ushk_supplier"] = store.ushk_supplier if store else None
         return JSONResponse(payload)
 
     @app.get("/api/stock/lookup")
@@ -293,19 +299,27 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         in_store: int = 0,
     ) -> JSONResponse:
         ident = _require_uploader(request, runtime)
-        # Для contributor смотрим очередь по всем магазинам (префикс md как фильтр в CSV — оба)
-        store_prefix = (
-            runtime.stores[0].prefix
-            if ident.role == ROLE_CONTRIBUTOR and runtime.stores
-            else ident.prefix
-        )
+        want_in_store = bool(in_store)
+        ushk_override: str | None = None
+
+        if ident.role == ROLE_CONTRIBUTOR:
+            # Все артикулы без фото (md/pg), фильтр «в магазине» — по складу сотрудника
+            store_prefix = ""
+            ushk_override = ident.ushk_supplier or None
+            in_store_only = want_in_store
+        else:
+            store_prefix = ident.prefix
+            in_store_only = want_in_store
+            store = next((s for s in runtime.stores if s.prefix == store_prefix), None)
+            ushk_override = store.ushk_supplier if store else None
+
         result = load_no_photos_queue_info(
             runtime,
             store_prefix=store_prefix,
             limit=min(limit, 200),
-            in_store_only=bool(in_store) and ident.role == ROLE_STORE,
+            in_store_only=in_store_only,
+            ushk_supplier=ushk_override,
         )
-        store = next((s for s in runtime.stores if s.prefix == store_prefix), None)
         return JSONResponse(
             {
                 "items": [
@@ -320,8 +334,8 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 "source_file": result.source_file,
                 "hint": result.hint,
                 "count": len(result.items),
-                "in_store_only": bool(in_store) and ident.role == ROLE_STORE,
-                "ushk_supplier": store.ushk_supplier if store else None,
+                "in_store_only": in_store_only,
+                "ushk_supplier": ushk_override,
             }
         )
 
@@ -421,11 +435,48 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                         "role": u.role,
                         "active": u.active,
                         "created_at": u.created_at,
+                        "ushk_supplier": u.ushk_supplier,
                     }
                     for u in users
                 ]
             }
         )
+
+    @app.get("/api/admin/shops")
+    async def admin_shops(request: Request) -> JSONResponse:
+        """Подсказки складов УШК для привязки сотрудника."""
+        _require_admin(request, runtime)
+        names: list[str] = []
+        seen: set[str] = set()
+
+        def _add(name: str) -> None:
+            n = name.strip()
+            if n and n not in seen:
+                seen.add(n)
+                names.append(n)
+
+        for shop in runtime.config.photo_upload.contributor_shops:
+            _add(shop)
+        for store in runtime.stores:
+            if store.ushk_supplier:
+                _add(store.ushk_supplier)
+
+        try:
+            import yaml as _yaml
+            from avito.store_registry import list_suppliers_by_prefix
+
+            secrets = (
+                _yaml.safe_load(runtime.secrets_file.read_text(encoding="utf-8")) or {}
+            )
+            for name in list_suppliers_by_prefix(
+                secrets, name_prefix=runtime.config.stock_sources.db_ushk_prefix
+            ):
+                _add(name)
+        except Exception as exc:
+            LOG.warning("Не удалось загрузить склады УШК из ERP: %s", exc)
+
+        names.sort(key=str.casefold)
+        return JSONResponse({"shops": names})
 
     @app.post("/api/admin/users")
     async def admin_create_user(request: Request) -> JSONResponse:
@@ -439,6 +490,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                     password=str(payload.get("password", "")),
                     role=str(payload.get("role") or photo_db.ROLE_CONTRIBUTOR),
                     display_name=str(payload.get("display_name", "")),
+                    ushk_supplier=str(payload.get("ushk_supplier", "")),
                 )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -450,8 +502,24 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                     "login": user.login,
                     "display_name": user.display_name,
                     "role": user.role,
+                    "ushk_supplier": user.ushk_supplier,
                 },
             }
+        )
+
+    @app.post("/api/admin/users/{user_id}/shop")
+    async def admin_set_shop(request: Request, user_id: int) -> JSONResponse:
+        _require_admin(request, runtime)
+        payload = await request.json()
+        try:
+            with runtime.db() as conn:
+                user = photo_db.set_user_ushk_supplier(
+                    conn, user_id, str(payload.get("ushk_supplier", ""))
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(
+            {"ok": True, "ushk_supplier": user.ushk_supplier, "id": user.id}
         )
 
     @app.post("/api/admin/users/{user_id}/active")
@@ -628,24 +696,36 @@ def _app_html(runtime: PhotoUploadRuntime, ident: SessionIdentity) -> str:
         "points_balance": ident.points_balance,
         "points_per_photo": runtime.points_per_photo if is_contrib else None,
         "max_photos": runtime.contributor_max_photos if is_contrib else 19,
+        "ushk_supplier": ident.ushk_supplier if is_contrib else None,
     }
     store_json = json.dumps(session, ensure_ascii=False)
     points_bar = ""
     if is_contrib:
         bal = ident.points_balance or 0
+        shop = ident.ushk_supplier or "магазин не назначен"
         points_bar = f'''
       <div class="topbar-points">Баллы: <strong id="points-balance">{bal}</strong>
         <span class="muted">(+{runtime.points_per_photo}/фото, до {runtime.contributor_max_photos})</span>
-      </div>'''
+      </div>
+      <div class="topbar-shop muted" id="user-shop">{shop}</div>'''
     queue_toggle = ""
-    if not is_contrib:
+    if is_contrib:
+        if ident.ushk_supplier:
+            queue_toggle = f"""
+      <label class="toggle-row">
+        <input type="checkbox" id="in-store-only" checked>
+        <span>Есть в моём магазине ({ident.ushk_supplier})</span>
+      </label>"""
+        else:
+            queue_toggle = """
+      <p class="muted queue-hint">Магазин не назначен — попросите админа указать склад УШК. Показаны все позиции без фото.</p>
+      <input type="checkbox" id="in-store-only" hidden>"""
+    else:
         queue_toggle = """
       <label class="toggle-row">
         <input type="checkbox" id="in-store-only">
         <span>Есть в магазине (по реестру УШК)</span>
       </label>"""
-    else:
-        queue_toggle = '<input type="checkbox" id="in-store-only" hidden>'
 
     return f"""<!DOCTYPE html>
 <html lang="ru">

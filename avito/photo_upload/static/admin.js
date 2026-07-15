@@ -12,6 +12,14 @@
   const deductMsg = document.getElementById("deduct-msg");
   const photosFilter = document.getElementById("photos-filter");
   const logoutBtn = document.getElementById("logout");
+  const createShopSelect = document.getElementById("create-shop-select");
+  const editShopSelect = document.getElementById("edit-shop-select");
+  const shopDialog = document.getElementById("shop-dialog");
+  const shopDialogForm = document.getElementById("shop-dialog-form");
+  const shopDialogTitle = document.getElementById("shop-dialog-title");
+
+  let knownShops = [];
+  let editShopUserId = null;
 
   function showToast(message) {
     if (!toast) return;
@@ -33,6 +41,30 @@
     return data;
   }
 
+  function fillShopSelect(select, selected, placeholder) {
+    if (!select) return;
+    const current = selected || "";
+    select.innerHTML = "";
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = placeholder || "Выберите магазин";
+    select.appendChild(empty);
+    knownShops.forEach(function (name) {
+      const opt = document.createElement("option");
+      opt.value = name;
+      opt.textContent = name;
+      if (name === current) opt.selected = true;
+      select.appendChild(opt);
+    });
+    if (current && knownShops.indexOf(current) === -1) {
+      const opt = document.createElement("option");
+      opt.value = current;
+      opt.textContent = current + " (текущий)";
+      opt.selected = true;
+      select.appendChild(opt);
+    }
+  }
+
   document.querySelectorAll(".admin-tab").forEach(function (tab) {
     tab.addEventListener("click", function () {
       const id = tab.getAttribute("data-tab");
@@ -51,6 +83,37 @@
     });
   });
 
+  async function loadShops() {
+    if (createShopSelect) {
+      createShopSelect.innerHTML = "";
+      const loading = document.createElement("option");
+      loading.value = "";
+      loading.textContent = "Загрузка списка…";
+      createShopSelect.appendChild(loading);
+      createShopSelect.disabled = true;
+    }
+    try {
+      const data = await api("api/admin/shops");
+      knownShops = data.shops || [];
+      fillShopSelect(createShopSelect, "", "Выберите магазин");
+      if (createShopSelect) createShopSelect.disabled = knownShops.length === 0;
+      if (!knownShops.length && createShopSelect) {
+        createShopSelect.options[0].textContent = "Список складов пуст";
+      }
+    } catch (err) {
+      knownShops = [];
+      if (createShopSelect) {
+        createShopSelect.disabled = true;
+        createShopSelect.innerHTML = "";
+        const fail = document.createElement("option");
+        fail.value = "";
+        fail.textContent = "Не удалось загрузить магазины";
+        createShopSelect.appendChild(fail);
+      }
+      showToast(String(err.message || err));
+    }
+  }
+
   async function loadUsers() {
     if (!usersList) return;
     usersList.textContent = "Загрузка…";
@@ -64,6 +127,10 @@
       data.users.forEach(function (u) {
         const row = document.createElement("div");
         row.className = "admin-row" + (u.active ? "" : " inactive");
+        const shopLabel =
+          u.role === "contributor"
+            ? u.ushk_supplier || "магазин не назначен"
+            : "—";
         row.innerHTML =
           "<div><strong>" +
           u.login +
@@ -73,11 +140,32 @@
           u.id +
           " · " +
           u.role +
+          " · " +
+          shopLabel +
           (u.active ? "" : " · выкл") +
           "</div></div>";
         const actions = document.createElement("div");
         actions.className = "actions";
         if (u.role === "contributor") {
+          const shopBtn = document.createElement("button");
+          shopBtn.type = "button";
+          shopBtn.className = "btn btn-secondary";
+          shopBtn.textContent = "Магазин";
+          shopBtn.addEventListener("click", function () {
+            if (!shopDialog || !editShopSelect) return;
+            if (!knownShops.length) {
+              showToast("Список магазинов ещё не загружен");
+              return;
+            }
+            editShopUserId = u.id;
+            if (shopDialogTitle) {
+              shopDialogTitle.textContent =
+                "Магазин: " + (u.display_name || u.login);
+            }
+            fillShopSelect(editShopSelect, u.ushk_supplier || "", "Выберите магазин");
+            shopDialog.showModal();
+          });
+          actions.appendChild(shopBtn);
           const toggle = document.createElement("button");
           toggle.type = "button";
           toggle.className = "btn btn-ghost";
@@ -124,11 +212,47 @@
     }
   }
 
+  if (shopDialogForm) {
+    shopDialogForm.addEventListener("submit", async function (event) {
+      const submitter = event.submitter;
+      const value = submitter ? submitter.value : "cancel";
+      if (value !== "ok") {
+        editShopUserId = null;
+        return;
+      }
+      event.preventDefault();
+      if (!editShopUserId || !editShopSelect) return;
+      const shop = String(editShopSelect.value || "").trim();
+      if (!shop) {
+        showToast("Выберите магазин");
+        return;
+      }
+      try {
+        await api("api/admin/users/" + editShopUserId + "/shop", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ushk_supplier: shop }),
+        });
+        if (shopDialog) shopDialog.close();
+        editShopUserId = null;
+        showToast("Магазин обновлён");
+        loadUsers();
+      } catch (err) {
+        showToast(String(err.message || err));
+      }
+    });
+  }
+
   if (createForm) {
     createForm.addEventListener("submit", async function (event) {
       event.preventDefault();
       if (createMsg) createMsg.textContent = "";
       const fd = new FormData(createForm);
+      const shop = String(fd.get("ushk_supplier") || "").trim();
+      if (!shop) {
+        if (createMsg) createMsg.textContent = "Выберите магазин из списка";
+        return;
+      }
       try {
         await api("api/admin/users", {
           method: "POST",
@@ -137,10 +261,12 @@
             login: fd.get("login"),
             password: fd.get("password"),
             display_name: fd.get("display_name") || "",
+            ushk_supplier: shop,
             role: "contributor",
           }),
         });
         createForm.reset();
+        fillShopSelect(createShopSelect, "", "Выберите магазин");
         if (createMsg) createMsg.textContent = "Создан";
         showToast("Сотрудник создан");
         loadUsers();
@@ -166,6 +292,7 @@
           u.id +
           '<div class="meta">' +
           (u.display_name || "") +
+          (u.ushk_supplier ? " · " + u.ushk_supplier : "") +
           "</div></div>" +
           "<div><strong>" +
           u.balance +
@@ -318,5 +445,6 @@
     });
   }
 
+  loadShops();
   loadUsers();
 })();

@@ -153,6 +153,46 @@ photo_upload:
             self.assertEqual(len(result.items), 1)
             self.assertEqual(result.items[0].article, "103918")
 
+    def test_no_photos_queue_ushk_override_no_prefix(self):
+        """Сотрудник: все магазины в CSV + фильтр по своему УШК."""
+        with tempfile.TemporaryDirectory() as tmp_name:
+            runtime = self._runtime(Path(tmp_name))
+            from avito.photo_upload.service import load_no_photos_queue_info
+
+            result = load_no_photos_queue_info(
+                runtime,
+                store_prefix="",
+                in_store_only=True,
+                ushk_supplier="УШК Тест",
+                in_store_articles=frozenset({"999999", "124889"}),
+            )
+            self.assertEqual({r.article for r in result.items}, {"999999", "124889"})
+
+    def test_contributor_ushk_in_db(self):
+        with tempfile.TemporaryDirectory() as tmp_name:
+            runtime = self._runtime(Path(tmp_name))
+            from avito.photo_upload import db as photo_db
+
+            conn = runtime.db()
+            try:
+                user = photo_db.create_user(
+                    conn,
+                    login="ivan",
+                    password="secret1",
+                    role=photo_db.ROLE_CONTRIBUTOR,
+                    display_name="Иван",
+                    ushk_supplier="УШК Сипайлово",
+                )
+                self.assertEqual(user.ushk_supplier, "УШК Сипайлово")
+                updated = photo_db.set_user_ushk_supplier(
+                    conn, user.id, "УШК Проспект Октября"
+                )
+                self.assertEqual(updated.ushk_supplier, "УШК Проспект Октября")
+                again = photo_db.get_user_by_id(conn, user.id)
+                self.assertEqual(again.ushk_supplier, "УШК Проспект Октября")
+            finally:
+                conn.close()
+
     def test_next_photo_index(self):
         with tempfile.TemporaryDirectory() as tmp_name:
             root = Path(tmp_name)

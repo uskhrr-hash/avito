@@ -87,3 +87,33 @@ def fetch_articles_at_supplier(
 
 def clear_register_cache() -> None:
     _CACHE.clear()
+
+
+LIST_SUPPLIERS_BY_PREFIX_SQL = """
+select distinct s.name
+from logistics.suppliers s
+where s.name like %s
+order by s.name
+"""
+
+
+def list_suppliers_by_prefix(
+    secrets: dict[str, Any],
+    *,
+    name_prefix: str = "УШК",
+) -> list[str]:
+    """Имена складов/поставщиков из ERP с префиксом (для выбора магазина сотрудника)."""
+    prefix = str(name_prefix or "").strip()
+    if not prefix:
+        return []
+    conn = _connect_db(secrets)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(LIST_SUPPLIERS_BY_PREFIX_SQL, (f"{prefix}%",))
+            return [
+                str(row[0]).strip()
+                for row in cur.fetchall()
+                if row and str(row[0]).strip()
+            ]
+    finally:
+        conn.close()

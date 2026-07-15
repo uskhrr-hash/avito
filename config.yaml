@@ -92,6 +92,11 @@ photo_upload:
   contributors_prefix: contributors
   points_per_photo: 10
   contributor_max_photos: 10
+  # Подсказки для выбора склада сотрудника (точные имена из ERP logistics.suppliers).
+  # Список также подтягивается из ERP (префикс УШК) при открытии админки.
+  contributor_shops: []
+    # - УШК Сипайлово
+    # - УШК Проспект Октября
 
 compare:
   stock_only: true

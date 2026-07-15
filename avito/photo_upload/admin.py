@@ -12,7 +12,7 @@ def render_admin_html(*, base: str) -> str:
   <base href="{base_href}">
   <title>Админка — фото Avito</title>
   <link rel="stylesheet" href="static/app.css">
-  <link rel="stylesheet" href="static/admin.css?v=1">
+  <link rel="stylesheet" href="static/admin.css?v=2">
 </head>
 <body class="page-admin">
   <header class="topbar">
@@ -43,6 +43,11 @@ def render_admin_html(*, base: str) -> str:
           <label class="field"><span>Имя</span>
             <input name="display_name" placeholder="Иван">
           </label>
+          <label class="field"><span>Магазин (склад УШК)</span>
+            <select name="ushk_supplier" id="create-shop-select" required>
+              <option value="">Загрузка списка…</option>
+            </select>
+          </label>
           <label class="field"><span>Пароль</span>
             <input name="password" type="password" required minlength="4">
           </label>
@@ -55,6 +60,21 @@ def render_admin_html(*, base: str) -> str:
         <div id="users-list" class="admin-list"></div>
       </div>
     </section>
+
+    <dialog id="shop-dialog" class="admin-dialog">
+      <form id="shop-dialog-form" method="dialog" class="admin-form">
+        <h2 id="shop-dialog-title">Магазин сотрудника</h2>
+        <label class="field"><span>Склад УШК</span>
+          <select name="ushk_supplier" id="edit-shop-select" required>
+            <option value="">Выберите магазин</option>
+          </select>
+        </label>
+        <div class="admin-dialog-actions">
+          <button type="submit" value="cancel" class="btn btn-ghost" formnovalidate>Отмена</button>
+          <button type="submit" value="ok" class="btn btn-primary">Сохранить</button>
+        </div>
+      </form>
+    </dialog>
 
     <section id="tab-points" class="admin-panel hidden">
       <div class="card">
@@ -105,6 +125,6 @@ def render_admin_html(*, base: str) -> str:
     </section>
   </main>
   <div id="toast" class="toast"></div>
-  <script src="static/admin.js?v=1"></script>
+  <script src="static/admin.js?v=3"></script>
 </body>
 </html>"""

@@ -20,6 +20,7 @@ class UserRow:
     display_name: str
     active: bool
     created_at: str
+    ushk_supplier: str = ""
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,8 @@ def init_db(conn: sqlite3.Connection) -> None:
             role TEXT NOT NULL CHECK(role IN ('contributor', 'admin')),
             display_name TEXT NOT NULL DEFAULT '',
             active INTEGER NOT NULL DEFAULT 1,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            ushk_supplier TEXT NOT NULL DEFAULT ''
         );
         CREATE TABLE IF NOT EXISTS point_ledger (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,6 +75,14 @@ def init_db(conn: sqlite3.Connection) -> None:
         CREATE INDEX IF NOT EXISTS idx_ledger_user ON point_ledger(user_id);
         """
     )
+    cols = {
+        str(row[1])
+        for row in conn.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "ushk_supplier" not in cols:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN ushk_supplier TEXT NOT NULL DEFAULT ''"
+        )
     conn.commit()
 
 
@@ -88,6 +98,8 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def _row_user(row: sqlite3.Row) -> UserRow:
+    keys = row.keys()
+    ushk = str(row["ushk_supplier"] or "") if "ushk_supplier" in keys else ""
     return UserRow(
         id=int(row["id"]),
         login=str(row["login"]),
@@ -95,6 +107,7 @@ def _row_user(row: sqlite3.Row) -> UserRow:
         display_name=str(row["display_name"] or ""),
         active=bool(row["active"]),
         created_at=str(row["created_at"]),
+        ushk_supplier=ushk.strip(),
     )
 
 
@@ -158,6 +171,7 @@ def create_user(
     password: str,
     role: str,
     display_name: str = "",
+    ushk_supplier: str = "",
 ) -> UserRow:
     login = login.strip()
     if not login:
@@ -166,13 +180,23 @@ def create_user(
         raise ValueError("Неизвестная роль")
     if len(password) < 4:
         raise ValueError("Пароль слишком короткий")
+    ushk = ushk_supplier.strip() if role == ROLE_CONTRIBUTOR else ""
     try:
         cur = conn.execute(
             """
-            INSERT INTO users (login, password_hash, role, display_name, active, created_at)
-            VALUES (?, ?, ?, ?, 1, ?)
+            INSERT INTO users (
+                login, password_hash, role, display_name, active, created_at, ushk_supplier
+            )
+            VALUES (?, ?, ?, ?, 1, ?, ?)
             """,
-            (login, hash_password(password), role, display_name.strip(), _utcnow()),
+            (
+                login,
+                hash_password(password),
+                role,
+                display_name.strip(),
+                _utcnow(),
+                ushk,
+            ),
         )
         conn.commit()
     except sqlite3.IntegrityError as exc:
@@ -180,6 +204,25 @@ def create_user(
     user = get_user_by_id(conn, int(cur.lastrowid))
     assert user is not None
     return user
+
+
+def set_user_ushk_supplier(
+    conn: sqlite3.Connection, user_id: int, ushk_supplier: str
+) -> UserRow:
+    user = get_user_by_id(conn, user_id)
+    if user is None:
+        raise ValueError("Пользователь не найден")
+    if user.role != ROLE_CONTRIBUTOR:
+        raise ValueError("Магазин только у сотрудника")
+    conn.execute(
+        "UPDATE users SET ushk_supplier = ? WHERE id = ?",
+        (ushk_supplier.strip(), user_id),
+    )
+    conn.commit()
+    updated = get_user_by_id(conn, user_id)
+    if updated is None:
+        raise ValueError("Пользователь не найден")
+    return updated
 
 
 def set_user_active(conn: sqlite3.Connection, user_id: int, active: bool) -> UserRow:
@@ -289,7 +332,7 @@ def deduct_points(
 def list_balances(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT u.id, u.login, u.display_name, u.role, u.active,
+        SELECT u.id, u.login, u.display_name, u.role, u.active, u.ushk_supplier,
                COALESCE(SUM(l.delta), 0) AS balance
         FROM users u
         LEFT JOIN point_ledger l ON l.user_id = u.id
@@ -307,6 +350,7 @@ def list_balances(conn: sqlite3.Connection) -> list[dict]:
             "role": str(r["role"]),
             "active": bool(r["active"]),
             "balance": int(r["balance"]),
+            "ushk_supplier": str(r["ushk_supplier"] or ""),
         }
         for r in rows
     ]

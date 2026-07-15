@@ -19,4 +19,15 @@ else
   echo "Сервис avito-photo-upload не установлен — пропуск"
 fi
 
+echo "=== systemd: ежедневный пайплайн (таймер) ==="
+chmod +x deploy/run-daily.sh
+cp deploy/avito-daily.service deploy/avito-daily.timer /etc/systemd/system/
+systemctl daemon-reload
+if systemctl is-enabled avito-daily.timer >/dev/null 2>&1; then
+  systemctl restart avito-daily.timer
+else
+  systemctl enable --now avito-daily.timer
+fi
+systemctl list-timers avito-daily.timer --no-pager || true
+
 echo "=== Готово ==="

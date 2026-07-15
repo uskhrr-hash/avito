@@ -1,0 +1,15 @@
+[Unit]
+Description=Avito full daily pipeline (stock → publish+sync)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/avito_tires_parser
+Environment=TZ=Asia/Yekaterinburg
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash /opt/avito_tires_parser/deploy/run-daily.sh
+
+[Install]
+WantedBy=multi-user.target

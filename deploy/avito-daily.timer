@@ -1,0 +1,13 @@
+[Unit]
+Description=Avito daily pipeline every 3h (Yekaterinburg 06–21)
+
+[Timer]
+# Слоты по Asia/Yekaterinburg (сервис выставляет TZ=Asia/Yekaterinburg;
+# OnCalendar интерпретируется в локальном времени сервера — предпочтительно
+# поставить timedatectl set-timezone Asia/Yekaterinburg на VPS).
+OnCalendar=*-*-* 06,09,12,15,18,21:00:00
+Persistent=true
+Unit=avito-daily.service
+
+[Install]
+WantedBy=timers.target

@@ -211,20 +211,51 @@ bash deploy/update-on-server.sh
 
 ---
 
-## ЧАСТЬ 4. Ежедневный пайплайн на сервере
+## ЧАСТЬ 4. Полный пайплайн на сервере (автомат)
 
-После обновления кода (`git pull`) запускайте на сервере:
+Цикл: `build_stock` → `process_manager_inbox` → `compare_prices` → `build_autoload` → `publish_avito_feed` (+ sync API).
+
+Таймер **каждые 3 часа** по Екатеринбургу: **06:00, 09:00, 12:00, 15:00, 18:00, 21:00**.
+
+### Один раз: часовой пояс сервера
+
+```bash
+timedatectl set-timezone Asia/Yekaterinburg
+timedatectl
+```
+
+(Иначе слоты таймера считаются в UTC / текущем TZ системы.)
+
+### После `git pull` / `update-on-server.sh`
+
+Таймер ставится автоматически. Первый раз перед автозапуском прогоните вручную:
 
 ```bash
 cd /opt/avito_tires_parser
-source .venv/bin/activate
-python build_stock.py
-python compare_prices.py
-python build_autoload.py
-python scripts/publish_avito_feed.py
+bash deploy/run-daily.sh
 ```
 
-Позже это можно повесить на cron (автоматически по расписанию).
+Логи: `logs/daily-YYYYMMDD.log`, краткий журнал — `logs/run.log`.
+
+### Управление таймером
+
+```bash
+systemctl list-timers avito-daily.timer
+systemctl status avito-daily.timer
+systemctl start avito-daily.service   # ручной прогон сейчас
+journalctl -u avito-daily -n 50 --no-pager
+```
+
+Отключить автозапуск:
+
+```bash
+systemctl disable --now avito-daily.timer
+```
+
+### Предпосылки
+
+В `config.local.yaml`: `avito_publish.enabled: true`, `avito_sync.enabled: true`, `photos_local_dir`, `report_email`.  
+В `secrets.local.yaml`: ERP, Google/CSV, Avito API (и Я.Диск, если нужен inbox).
 
 ---
 
@@ -286,5 +317,6 @@ cat /opt/avito_tires_parser/config.local.yaml
 |---|---|---|
 | Отправить код | ПК | `git add -A` → `git commit -m "..."` → `git push` |
 | Обновить сервер | VPS | `bash deploy/update-on-server.sh` |
-| Собрать фид | VPS | `build_stock` → `compare_prices` → `build_autoload` → `publish` |
+| Собрать фид / publish | VPS авто | `avito-daily.timer` → `deploy/run-daily.sh` |
+| Ручной прогон сейчас | VPS | `systemctl start avito-daily.service` |
 | Фото с телефона | Браузер | https://avito.shinaufa.ru/photo/ |

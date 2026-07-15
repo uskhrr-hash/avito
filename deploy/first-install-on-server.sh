@@ -50,6 +50,14 @@ systemctl daemon-reload
 systemctl enable avito-photo-upload
 systemctl restart avito-photo-upload
 
+echo "=== systemd: ежедневный пайплайн (таймер) ==="
+chmod +x deploy/run-daily.sh
+cp deploy/avito-daily.service deploy/avito-daily.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable avito-daily.timer
+systemctl start avito-daily.timer
+echo "Перед первым автозапуском проверьте вручную: bash deploy/run-daily.sh"
+
 echo "=== nginx ==="
 echo "Скопируйте deploy/nginx-avito.shinaufa.ru.conf в /etc/nginx/sites-available/"
 echo "и сделайте symlink в sites-enabled, затем: nginx -t && systemctl reload nginx"
@@ -59,5 +67,7 @@ echo "scp data/avito_descriptions.db root@SERVER:$APP_DIR/data/"
 
 echo "=== Готово. Проверка: ==="
 echo "  systemctl status avito-photo-upload"
+echo "  systemctl list-timers avito-daily.timer"
 echo "  curl -s https://avito.shinaufa.ru/health"
 echo "  https://avito.shinaufa.ru/photo/"
+echo "Рекомендуется: timedatectl set-timezone Asia/Yekaterinburg"

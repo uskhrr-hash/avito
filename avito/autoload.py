@@ -506,6 +506,7 @@ def _photo_urls_for_article(
         legacy_unprefixed_prefix=stores.legacy_unprefixed_store,
         max_count=int(cfg.image_count or 0),
         jpeg_quality=cfg.jpeg_quality,
+        contributors_prefix=cfg.contributors_prefix,
     )
     if not resolved.store_sets:
         return "", ""
@@ -1429,6 +1430,7 @@ def fill_autoload_template(
             legacy_unprefixed_prefix=stores.legacy_unprefixed_store,
             max_count=int(cfg.image_count or 0),
             jpeg_quality=cfg.jpeg_quality,
+            contributors_prefix=cfg.contributors_prefix,
         )
         store_photo_sets = list(resolved_photos.store_sets)
         if resolved_photos.source == "model":

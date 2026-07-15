@@ -501,7 +501,18 @@
       }, 400);
       const savedCount =
         data.saved && data.saved.length ? data.saved.length : count;
-      showToast("✓ Сохранено: " + savedCount + " фото");
+      let toastMsg = "✓ Сохранено: " + savedCount + " фото";
+      if (data.points_awarded) {
+        toastMsg += " · +" + data.points_awarded + " баллов";
+      }
+      if (typeof data.balance === "number") {
+        const balEl = document.getElementById("points-balance");
+        if (balEl) balEl.textContent = String(data.balance);
+        if (window.PHOTO_UPLOAD_SESSION) {
+          window.PHOTO_UPLOAD_SESSION.points_balance = data.balance;
+        }
+      }
+      showToast(toastMsg);
       await loadQueue();
     } catch (error) {
       showToast(String(error.message || error));

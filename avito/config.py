@@ -85,6 +85,7 @@ class AutoloadSettings:
     max_listing_quantity: int = 12
     new_listings_feed: Path | None = None
     photo_updates_feed: Path | None = None
+    contributors_prefix: str = "contributors"
 
 
 @dataclass
@@ -106,6 +107,10 @@ class PhotoUploadSettings:
     session_max_age_hours: int
     max_upload_mb: int
     public_mount_path: str
+    db_path: Path
+    contributors_prefix: str
+    points_per_photo: int
+    contributor_max_photos: int
 
 
 @dataclass
@@ -404,6 +409,10 @@ def _load_autoload(raw: dict) -> AutoloadSettings:
         photo_updates_feed=_optional_path(
             raw.get("photo_updates_feed", "input/autoload_photo_updates.xlsx")
         ),
+        contributors_prefix=str(
+            raw.get("contributors_prefix", "contributors")
+        ).strip()
+        or "contributors",
     )
 
 
@@ -421,6 +430,8 @@ def _load_photo_upload(raw: dict) -> PhotoUploadSettings:
     mount = str(raw.get("public_mount_path", "/photo")).strip() or "/photo"
     if not mount.startswith("/"):
         mount = f"/{mount}"
+    db_raw = str(raw.get("db_path", "data/photo_upload.db")).strip() or "data/photo_upload.db"
+    contrib = str(raw.get("contributors_prefix", "contributors")).strip() or "contributors"
     return PhotoUploadSettings(
         enabled=bool(raw.get("enabled", False)),
         host=str(raw.get("host", "127.0.0.1")),
@@ -428,4 +439,8 @@ def _load_photo_upload(raw: dict) -> PhotoUploadSettings:
         session_max_age_hours=int(raw.get("session_max_age_hours", 72)),
         max_upload_mb=int(raw.get("max_upload_mb", 12)),
         public_mount_path=mount.rstrip("/") or "/photo",
+        db_path=Path(db_raw),
+        contributors_prefix=contrib,
+        points_per_photo=max(0, int(raw.get("points_per_photo", 10))),
+        contributor_max_photos=max(1, int(raw.get("contributor_max_photos", 10))),
     )

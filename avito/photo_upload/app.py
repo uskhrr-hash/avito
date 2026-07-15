@@ -4,16 +4,26 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
+from avito.photo_upload import db as photo_db
+from avito.photo_upload.admin import render_admin_html
 from avito.photo_upload.guide import render_guide_html
-from avito.photo_upload.overlays import EXAMPLE_FILES, ghost_image_for_shot, overlay_svg_for_shot, shot_label
+from avito.photo_upload.overlays import (
+    EXAMPLE_FILES,
+    ghost_image_for_shot,
+    overlay_svg_for_shot,
+    shot_label,
+)
 from avito.photo_upload.service import (
+    delete_photo_file,
+    list_photo_files,
     load_no_photos_queue_info,
     lookup_stock,
     next_photo_index,
@@ -26,28 +36,111 @@ from avito.photo_upload.settings import PhotoUploadRuntime, StoreLogin, load_pho
 
 LOG = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).resolve().parent / "static"
-SESSION_STORE_KEY = "photo_upload_store"
+SESSION_ROLE = "photo_upload_role"
+SESSION_STORE = "photo_upload_store"
+SESSION_USER_ID = "photo_upload_user_id"
+
+ROLE_STORE = "store"
+ROLE_CONTRIBUTOR = "contributor"
+ROLE_ADMIN = "admin"
 
 
-def _verify_password(store: StoreLogin, password: str) -> bool:
+@dataclass(frozen=True)
+class SessionIdentity:
+    role: str
+    prefix: str
+    label: str
+    user_id: int | None = None
+    points_balance: int | None = None
+
+
+def _verify_store_password(store: StoreLogin, password: str) -> bool:
     return hmac.compare_digest(store.password, password)
 
 
-def _current_store(request: Request, runtime: PhotoUploadRuntime) -> StoreLogin | None:
-    prefix = str(request.session.get(SESSION_STORE_KEY, "")).strip()
-    if not prefix:
+def _current_identity(
+    request: Request, runtime: PhotoUploadRuntime
+) -> SessionIdentity | None:
+    role = str(request.session.get(SESSION_ROLE, "")).strip()
+    if role == ROLE_STORE:
+        prefix = str(request.session.get(SESSION_STORE, "")).strip()
+        for store in runtime.stores:
+            if store.prefix == prefix:
+                return SessionIdentity(
+                    role=ROLE_STORE, prefix=store.prefix, label=store.label
+                )
         return None
-    for store in runtime.stores:
-        if store.prefix == prefix:
-            return store
+    if role in (ROLE_CONTRIBUTOR, ROLE_ADMIN):
+        user_id = request.session.get(SESSION_USER_ID)
+        try:
+            uid = int(user_id)
+        except (TypeError, ValueError):
+            return None
+        user = None
+        balance = None
+        with runtime.db() as conn:
+            user = photo_db.get_user_by_id(conn, uid)
+            if user is not None and user.active and user.role == role:
+                if role == ROLE_CONTRIBUTOR:
+                    balance = photo_db.user_balance(conn, uid)
+        if user is None or not user.active or user.role != role:
+            return None
+        if role == ROLE_CONTRIBUTOR:
+            return SessionIdentity(
+                role=ROLE_CONTRIBUTOR,
+                prefix=runtime.contributors_prefix,
+                label=user.display_name or user.login,
+                user_id=uid,
+                points_balance=balance,
+            )
+        return SessionIdentity(
+            role=ROLE_ADMIN,
+            prefix="",
+            label=user.display_name or user.login,
+            user_id=uid,
+        )
+    # backward compat: old sessions only had store key
+    prefix = str(request.session.get(SESSION_STORE, "")).strip()
+    if prefix:
+        for store in runtime.stores:
+            if store.prefix == prefix:
+                return SessionIdentity(
+                    role=ROLE_STORE, prefix=store.prefix, label=store.label
+                )
     return None
 
 
-def _require_store(request: Request, runtime: PhotoUploadRuntime) -> StoreLogin:
-    store = _current_store(request, runtime)
-    if store is None:
+def _require_identity(
+    request: Request, runtime: PhotoUploadRuntime
+) -> SessionIdentity:
+    ident = _current_identity(request, runtime)
+    if ident is None:
         raise HTTPException(status_code=401, detail="Нужен вход")
-    return store
+    return ident
+
+
+def _require_uploader(
+    request: Request, runtime: PhotoUploadRuntime
+) -> SessionIdentity:
+    ident = _require_identity(request, runtime)
+    if ident.role not in (ROLE_STORE, ROLE_CONTRIBUTOR):
+        raise HTTPException(status_code=403, detail="Нет доступа к загрузке")
+    return ident
+
+
+def _require_admin(
+    request: Request, runtime: PhotoUploadRuntime
+) -> SessionIdentity:
+    ident = _require_identity(request, runtime)
+    if ident.role != ROLE_ADMIN:
+        raise HTTPException(status_code=403, detail="Только админ")
+    return ident
+
+
+def _max_index_for(ident: SessionIdentity, runtime: PhotoUploadRuntime) -> int:
+    if ident.role == ROLE_CONTRIBUTOR:
+        return runtime.contributor_max_photos
+    return 19
 
 
 def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
@@ -84,30 +177,65 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
 
     @app.get("/", response_class=HTMLResponse)
     async def index(request: Request) -> HTMLResponse:
-        if _current_store(request, runtime) is None:
+        ident = _current_identity(request, runtime)
+        if ident is None:
             return HTMLResponse(_login_html(runtime))
-        return HTMLResponse(_app_html(runtime, _current_store(request, runtime)))
+        if ident.role == ROLE_ADMIN:
+            return RedirectResponse(url="admin", status_code=302)
+        return HTMLResponse(_app_html(runtime, ident))
+
+    @app.get("/admin", response_class=HTMLResponse)
+    async def admin_page(request: Request) -> HTMLResponse:
+        ident = _current_identity(request, runtime)
+        if ident is None:
+            return RedirectResponse(url="./", status_code=302)
+        if ident.role != ROLE_ADMIN:
+            raise HTTPException(status_code=403, detail="Только админ")
+        return HTMLResponse(render_admin_html(base=_mount_base(runtime)))
 
     @app.get("/api/stores")
     async def api_stores() -> JSONResponse:
-        payload = [
-            {"prefix": s.prefix, "label": s.label}
-            for s in runtime.stores
-        ]
+        payload = [{"prefix": s.prefix, "label": s.label} for s in runtime.stores]
         return JSONResponse(payload)
 
     @app.post("/api/login")
     async def api_login(request: Request) -> JSONResponse:
         payload = await request.json()
-        prefix = str(payload.get("store", "")).strip()
+        store_prefix = str(payload.get("store", "")).strip()
+        login = str(payload.get("login", "")).strip()
         password = str(payload.get("password", ""))
-        store = next((s for s in runtime.stores if s.prefix == prefix), None)
-        if store is None or not _verify_password(store, password):
-            raise HTTPException(status_code=401, detail="Неверный магазин или пароль")
-        request.session[SESSION_STORE_KEY] = store.prefix
-        return JSONResponse(
-            {"ok": True, "store": store.prefix, "label": store.label}
-        )
+
+        if store_prefix:
+            store = next((s for s in runtime.stores if s.prefix == store_prefix), None)
+            if store is None or not _verify_store_password(store, password):
+                raise HTTPException(status_code=401, detail="Неверный магазин или пароль")
+            request.session.clear()
+            request.session[SESSION_ROLE] = ROLE_STORE
+            request.session[SESSION_STORE] = store.prefix
+            return JSONResponse(
+                {"ok": True, "role": ROLE_STORE, "store": store.prefix, "label": store.label}
+            )
+
+        if login:
+            with runtime.db() as conn:
+                user = photo_db.authenticate_user(conn, login, password)
+            if user is None:
+                raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+            request.session.clear()
+            request.session[SESSION_ROLE] = user.role
+            request.session[SESSION_USER_ID] = user.id
+            if user.role == ROLE_CONTRIBUTOR:
+                request.session[SESSION_STORE] = runtime.contributors_prefix
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "role": user.role,
+                    "label": user.display_name or user.login,
+                    "redirect": "admin" if user.role == ROLE_ADMIN else "./",
+                }
+            )
+
+        raise HTTPException(status_code=400, detail="Укажите магазин или логин")
 
     @app.post("/api/logout")
     async def api_logout(request: Request) -> JSONResponse:
@@ -116,16 +244,21 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
 
     @app.get("/api/me")
     async def api_me(request: Request) -> JSONResponse:
-        store = _current_store(request, runtime)
-        if store is None:
-            raise HTTPException(status_code=401, detail="Нужен вход")
-        return JSONResponse(
-            {"store": store.prefix, "label": store.label}
-        )
+        ident = _require_identity(request, runtime)
+        payload = {
+            "role": ident.role,
+            "store": ident.prefix,
+            "label": ident.label,
+        }
+        if ident.role == ROLE_CONTRIBUTOR:
+            payload["points_balance"] = ident.points_balance
+            payload["points_per_photo"] = runtime.points_per_photo
+            payload["max_photos"] = runtime.contributor_max_photos
+        return JSONResponse(payload)
 
     @app.get("/api/stock/lookup")
     async def api_stock_lookup(request: Request, article: str = "") -> JSONResponse:
-        _require_store(request, runtime)
+        _require_uploader(request, runtime)
         item = lookup_stock(runtime, article)
         if item is None:
             return JSONResponse({"found": False})
@@ -140,7 +273,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
 
     @app.get("/api/stock/search")
     async def api_stock_search(request: Request, q: str = "") -> JSONResponse:
-        _require_store(request, runtime)
+        _require_uploader(request, runtime)
         rows = search_stock(runtime, q)
         return JSONResponse(
             [
@@ -159,13 +292,20 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         limit: int = 80,
         in_store: int = 0,
     ) -> JSONResponse:
-        store = _require_store(request, runtime)
+        ident = _require_uploader(request, runtime)
+        # Для contributor смотрим очередь по всем магазинам (префикс md как фильтр в CSV — оба)
+        store_prefix = (
+            runtime.stores[0].prefix
+            if ident.role == ROLE_CONTRIBUTOR and runtime.stores
+            else ident.prefix
+        )
         result = load_no_photos_queue_info(
             runtime,
-            store_prefix=store.prefix,
+            store_prefix=store_prefix,
             limit=min(limit, 200),
-            in_store_only=bool(in_store),
+            in_store_only=bool(in_store) and ident.role == ROLE_STORE,
         )
+        store = next((s for s in runtime.stores if s.prefix == store_prefix), None)
         return JSONResponse(
             {
                 "items": [
@@ -180,18 +320,31 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 "source_file": result.source_file,
                 "hint": result.hint,
                 "count": len(result.items),
-                "in_store_only": bool(in_store),
-                "ushk_supplier": store.ushk_supplier,
+                "in_store_only": bool(in_store) and ident.role == ROLE_STORE,
+                "ushk_supplier": store.ushk_supplier if store else None,
             }
         )
 
     @app.get("/api/next-index")
     async def api_next_index(request: Request, article: str = "") -> JSONResponse:
-        store = _require_store(request, runtime)
+        ident = _require_uploader(request, runtime)
         art = validate_article(article)
-        idx = next_photo_index(runtime, store_prefix=store.prefix, article=art)
+        max_idx = _max_index_for(ident, runtime)
+        try:
+            idx = next_photo_index(
+                runtime,
+                store_prefix=ident.prefix,
+                article=art,
+                max_index=max_idx,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         meta = pending_photo_meta(
-            runtime, store_prefix=store.prefix, article=art, index=idx
+            runtime,
+            store_prefix=ident.prefix,
+            article=art,
+            index=idx,
+            max_index=max_idx,
         )
         return JSONResponse(
             {
@@ -208,8 +361,9 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         indices: str = Form(...),
         files: list[UploadFile] = File(...),
     ) -> JSONResponse:
-        store = _require_store(request, runtime)
+        ident = _require_uploader(request, runtime)
         art = validate_article(article)
+        max_idx = _max_index_for(ident, runtime)
         try:
             index_list = [int(x.strip()) for x in indices.split(",") if x.strip()]
         except ValueError as exc:
@@ -229,9 +383,13 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         try:
             result = save_upload_batch(
                 runtime,
-                store_prefix=store.prefix,
+                store_prefix=ident.prefix,
                 article=art,
                 items=items,
+                max_index=max_idx,
+                contributor_user_id=(
+                    ident.user_id if ident.role == ROLE_CONTRIBUTOR else None
+                ),
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -241,8 +399,158 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 "ok": True,
                 "article": result.article,
                 "saved": result.saved,
+                "points_awarded": result.points_awarded,
+                "balance": result.balance,
             }
         )
+
+    # --- admin APIs ---
+
+    @app.get("/api/admin/users")
+    async def admin_users(request: Request) -> JSONResponse:
+        _require_admin(request, runtime)
+        with runtime.db() as conn:
+            users = photo_db.list_users(conn)
+        return JSONResponse(
+            {
+                "users": [
+                    {
+                        "id": u.id,
+                        "login": u.login,
+                        "display_name": u.display_name,
+                        "role": u.role,
+                        "active": u.active,
+                        "created_at": u.created_at,
+                    }
+                    for u in users
+                ]
+            }
+        )
+
+    @app.post("/api/admin/users")
+    async def admin_create_user(request: Request) -> JSONResponse:
+        _require_admin(request, runtime)
+        payload = await request.json()
+        try:
+            with runtime.db() as conn:
+                user = photo_db.create_user(
+                    conn,
+                    login=str(payload.get("login", "")),
+                    password=str(payload.get("password", "")),
+                    role=str(payload.get("role") or photo_db.ROLE_CONTRIBUTOR),
+                    display_name=str(payload.get("display_name", "")),
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                "ok": True,
+                "user": {
+                    "id": user.id,
+                    "login": user.login,
+                    "display_name": user.display_name,
+                    "role": user.role,
+                },
+            }
+        )
+
+    @app.post("/api/admin/users/{user_id}/active")
+    async def admin_set_active(request: Request, user_id: int) -> JSONResponse:
+        _require_admin(request, runtime)
+        payload = await request.json()
+        try:
+            with runtime.db() as conn:
+                user = photo_db.set_user_active(
+                    conn, user_id, bool(payload.get("active", True))
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"ok": True, "active": user.active})
+
+    @app.post("/api/admin/users/{user_id}/password")
+    async def admin_reset_password(request: Request, user_id: int) -> JSONResponse:
+        _require_admin(request, runtime)
+        payload = await request.json()
+        try:
+            with runtime.db() as conn:
+                photo_db.reset_password(
+                    conn, user_id, str(payload.get("password", ""))
+                )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"ok": True})
+
+    @app.get("/api/admin/balances")
+    async def admin_balances(request: Request) -> JSONResponse:
+        _require_admin(request, runtime)
+        with runtime.db() as conn:
+            items = photo_db.list_balances(conn)
+        return JSONResponse({"items": items})
+
+    @app.get("/api/admin/ledger")
+    async def admin_ledger(
+        request: Request, user_id: int | None = None, limit: int = 50
+    ) -> JSONResponse:
+        _require_admin(request, runtime)
+        with runtime.db() as conn:
+            rows = photo_db.list_ledger(conn, user_id=user_id, limit=limit)
+        return JSONResponse(
+            {
+                "items": [
+                    {
+                        "id": r.id,
+                        "user_id": r.user_id,
+                        "login": r.login,
+                        "display_name": r.display_name,
+                        "delta": r.delta,
+                        "reason": r.reason,
+                        "article": r.article,
+                        "photo_index": r.photo_index,
+                        "created_at": r.created_at,
+                    }
+                    for r in rows
+                ]
+            }
+        )
+
+    @app.post("/api/admin/points/deduct")
+    async def admin_deduct(request: Request) -> JSONResponse:
+        admin = _require_admin(request, runtime)
+        payload = await request.json()
+        try:
+            with runtime.db() as conn:
+                balance = photo_db.deduct_points(
+                    conn,
+                    user_id=int(payload.get("user_id")),
+                    amount=int(payload.get("amount", 0)),
+                    reason=str(payload.get("reason", "")),
+                    admin_id=admin.user_id or 0,
+                )
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"ok": True, "balance": balance})
+
+    @app.get("/api/admin/photos")
+    async def admin_photos(
+        request: Request, folder: str = "", article: str = "", limit: int = 80
+    ) -> JSONResponse:
+        _require_admin(request, runtime)
+        items = list_photo_files(
+            runtime, folder=folder, article=article, limit=min(limit, 200)
+        )
+        return JSONResponse({"items": items})
+
+    @app.post("/api/admin/photos/delete")
+    async def admin_photos_delete(request: Request) -> JSONResponse:
+        _require_admin(request, runtime)
+        payload = await request.json()
+        try:
+            deleted = delete_photo_file(
+                runtime, str(payload.get("relative_path", ""))
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"ok": True, "deleted": deleted})
 
     return app
 
@@ -278,33 +586,67 @@ def _login_html(runtime: PhotoUploadRuntime) -> str:
 <body class="page-login">
   <main class="shell">
     <h1>Фото Avito</h1>
-    <p class="lead">Нажмите на свой магазин и введите пароль</p>
+    <p class="lead">Магазин или логин сотрудника</p>
     <a class="login-guide-link" href="guide">📷 Стандарт съёмки: 4 фото с контурами</a>
+
     <form id="login-form" class="card">
-      <p class="field"><span>Магазин</span></p>
+      <p class="field"><span>Магазин (Авито)</span></p>
       <div class="store-grid" id="store-grid">
 {store_cards}
       </div>
       <input type="hidden" id="store" name="store" value="">
       <label class="field">
+        <span>Пароль магазина</span>
+        <input id="password" type="password" autocomplete="current-password" placeholder="Если выбран магазин">
+      </label>
+      <hr class="login-divider">
+      <p class="field"><span>Или сотрудник / админ</span></p>
+      <label class="field">
+        <span>Логин</span>
+        <input id="login" type="text" autocomplete="username" placeholder="логин">
+      </label>
+      <label class="field">
         <span>Пароль</span>
-        <input id="password" type="password" autocomplete="current-password" inputmode="text" required placeholder="Пароль магазина">
+        <input id="user-password" type="password" autocomplete="current-password" placeholder="пароль сотрудника">
       </label>
       <p id="login-error" class="error hidden"></p>
       <button type="submit" class="btn btn-primary">Войти</button>
     </form>
   </main>
-  <script src="static/login.js"></script>
+  <script src="static/login.js?v=2"></script>
 </body>
 </html>"""
 
 
-def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
+def _app_html(runtime: PhotoUploadRuntime, ident: SessionIdentity) -> str:
     base = _mount_base(runtime)
-    store_json = json.dumps(
-        {"prefix": store.prefix, "label": store.label},
-        ensure_ascii=False,
-    )
+    is_contrib = ident.role == ROLE_CONTRIBUTOR
+    session = {
+        "role": ident.role,
+        "prefix": ident.prefix,
+        "label": ident.label,
+        "points_balance": ident.points_balance,
+        "points_per_photo": runtime.points_per_photo if is_contrib else None,
+        "max_photos": runtime.contributor_max_photos if is_contrib else 19,
+    }
+    store_json = json.dumps(session, ensure_ascii=False)
+    points_bar = ""
+    if is_contrib:
+        bal = ident.points_balance or 0
+        points_bar = f'''
+      <div class="topbar-points">Баллы: <strong id="points-balance">{bal}</strong>
+        <span class="muted">(+{runtime.points_per_photo}/фото, до {runtime.contributor_max_photos})</span>
+      </div>'''
+    queue_toggle = ""
+    if not is_contrib:
+        queue_toggle = """
+      <label class="toggle-row">
+        <input type="checkbox" id="in-store-only">
+        <span>Есть в магазине (по реестру УШК)</span>
+      </label>"""
+    else:
+        queue_toggle = '<input type="checkbox" id="in-store-only" hidden>'
+
     return f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -314,7 +656,7 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <base href="{base}">
-  <title>Фото — {store.label}</title>
+  <title>Фото — {ident.label}</title>
   <link rel="stylesheet" href="static/app.css">
   <link rel="stylesheet" href="static/camera.css?v=4">
 </head>
@@ -322,7 +664,8 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
   <header class="topbar">
     <div>
       <div class="topbar-title">Фото Avito</div>
-      <div class="topbar-sub">{store.label}</div>
+      <div class="topbar-sub">{ident.label}</div>
+      {points_bar}
     </div>
     <div class="topbar-actions">
       <a href="guide" class="topbar-guide">Стандарт</a>
@@ -357,10 +700,7 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
     <details class="card section-queue" open>
       <summary>Нет фото — снять из списка</summary>
       <p class="muted queue-hint">Нажмите на позицию — подставится артикул</p>
-      <label class="toggle-row">
-        <input type="checkbox" id="in-store-only">
-        <span>Есть в магазине (по реестру УШК)</span>
-      </label>
+      {queue_toggle}
       <button type="button" id="refresh-queue" class="btn btn-ghost btn-block">Обновить список</button>
       <div id="queue-list" class="queue-list"></div>
     </details>
@@ -400,6 +740,6 @@ def _app_html(runtime: PhotoUploadRuntime, store: StoreLogin) -> str:
   </div>
 
   <script>window.PHOTO_UPLOAD_SESSION = {store_json};</script>
-  <script src="static/app.js?v=5"></script>
+  <script src="static/app.js?v=6"></script>
 </body>
 </html>"""

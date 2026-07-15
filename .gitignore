@@ -58,6 +58,8 @@ model_descriptions.yaml
 
 data/avito_descriptions.db
 
+data/photo_upload.db
+
 data/4tochki_html_cache/
 
 data/4tochki_descriptions.json

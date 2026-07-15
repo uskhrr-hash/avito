@@ -1,6 +1,7 @@
 """Имена и поиск фото на Яндекс.Диске (с префиксом магазина)."""
 from __future__ import annotations
 
+import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -245,8 +246,13 @@ def discover_photos_for_stores(
     article_first: bool = False,
     max_count: int = 0,
     jpeg_quality: int = 92,
+    contributors_prefix: str | None = None,
 ) -> list[StorePhotos]:
-    """По каждому магазину — отдельный набор файлов, если есть хотя бы одно фото."""
+    """По каждому магазину — отдельный набор файлов, если есть хотя бы одно фото.
+
+    Если ни у одного магазина нет фото, но есть в contributors_prefix —
+    возвращаем один StorePhotos с assign_store_for_contributor_article.
+    """
     art = str(article).strip()
     if not art:
         return []
@@ -284,7 +290,36 @@ def discover_photos_for_stores(
                 StorePhotos(prefix=legacy_unprefixed_prefix, files=tuple(files))
             )
 
+    if out:
+        return out
+
+    pool = (contributors_prefix or "").strip()
+    if pool and prefixes:
+        files = discover_prefixed_photos(
+            folder,
+            pool,
+            art,
+            layout=layout,
+            prefix_in_filename=False,
+            max_count=max_count,
+            jpeg_quality=jpeg_quality,
+        )
+        if files:
+            assigned = assign_store_for_contributor_article(art, prefixes)
+            return [StorePhotos(prefix=assigned, files=tuple(files))]
+
     return out
+
+
+def assign_store_for_contributor_article(
+    article: str, prefixes: tuple[str, ...]
+) -> str:
+    """Детерминированно ~50/50 между md/pg по артикулу."""
+    if not prefixes:
+        raise ValueError("Нет магазинов для назначения")
+    digest = hashlib.md5(str(article).strip().encode("utf-8")).hexdigest()
+    idx = int(digest, 16) % len(prefixes)
+    return prefixes[idx]
 
 
 def newest_file_mtime(files: tuple[Path, ...] | list[Path]) -> float | None:
@@ -328,6 +363,7 @@ def resolve_listing_stores(
     legacy_unprefixed_prefix: str | None = None,
     max_count: int = 0,
     jpeg_quality: int = 92,
+    contributors_prefix: str | None = None,
 ) -> list[StorePhotos]:
     """Найти фото и при конфликте магазинов оставить одного победителя."""
     return list(
@@ -340,6 +376,7 @@ def resolve_listing_stores(
             legacy_unprefixed_prefix=legacy_unprefixed_prefix,
             max_count=max_count,
             jpeg_quality=jpeg_quality,
+            contributors_prefix=contributors_prefix,
         ).store_sets
     )
 
@@ -358,6 +395,7 @@ def resolve_listing_photo_sets(
     legacy_unprefixed_prefix: str | None = None,
     max_count: int = 0,
     jpeg_quality: int = 92,
+    contributors_prefix: str | None = None,
 ) -> ResolvedListingPhotos:
     """
     Сначала фото по артикулу (md12345-1.jpg), иначе — по бренду+модели.
@@ -377,6 +415,7 @@ def resolve_listing_photo_sets(
         article_first=article_first,
         max_count=max_count,
         jpeg_quality=jpeg_quality,
+        contributors_prefix=contributors_prefix,
     )
     if len(all_found) <= 1:
         store_sets = all_found

@@ -47,6 +47,8 @@ class PendingPhotoMeta:
 class UploadResult:
     saved: list[str]
     article: str
+    points_awarded: int = 0
+    balance: int | None = None
 
 
 def normalize_article(value: str) -> str:
@@ -221,10 +223,13 @@ def next_photo_index(
     *,
     store_prefix: str,
     article: str,
+    max_index: int | None = None,
 ) -> int:
     art = validate_article(article)
+    limit = max_index if max_index is not None else 19
+    limit = max(1, min(int(limit), 19))
     existing: set[int] = set()
-    for idx in range(1, 20):
+    for idx in range(1, limit + 1):
         rel = photo_relative_path(
             art,
             idx,
@@ -234,10 +239,10 @@ def next_photo_index(
         )
         if (runtime.photos_dir / Path(rel)).is_file():
             existing.add(idx)
-    for idx in range(1, 20):
+    for idx in range(1, limit + 1):
         if idx not in existing:
             return idx
-    return max(existing, default=0) + 1
+    raise ValueError(f"Уже есть {limit} фото для артикула {art}")
 
 
 def pending_photo_meta(
@@ -246,10 +251,13 @@ def pending_photo_meta(
     store_prefix: str,
     article: str,
     index: int,
+    max_index: int | None = None,
 ) -> PendingPhotoMeta:
     art = validate_article(article)
-    if index < 1 or index > 19:
-        raise ValueError("Номер фото: от 1 до 19")
+    limit = max_index if max_index is not None else 19
+    limit = max(1, min(int(limit), 19))
+    if index < 1 or index > limit:
+        raise ValueError(f"Номер фото: от 1 до {limit}")
     rel = photo_relative_path(
         art,
         index,
@@ -267,6 +275,23 @@ def pending_photo_meta(
     return PendingPhotoMeta(index=index, relative_path=rel, filename=name)
 
 
+def photo_slot_exists(
+    runtime: PhotoUploadRuntime,
+    *,
+    store_prefix: str,
+    article: str,
+    index: int,
+) -> bool:
+    rel = photo_relative_path(
+        article,
+        index,
+        store_prefix=store_prefix,
+        photo_layout=runtime.photo_layout,
+        prefix_in_filename=runtime.prefix_in_filename,
+    )
+    return (runtime.photos_dir / Path(rel)).is_file()
+
+
 def save_uploaded_photo(
     runtime: PhotoUploadRuntime,
     *,
@@ -274,10 +299,18 @@ def save_uploaded_photo(
     article: str,
     index: int,
     data: bytes,
-) -> str:
+    max_index: int | None = None,
+) -> tuple[str, bool]:
+    """Сохранить фото. Возвращает (relative_path, was_new_slot)."""
     if len(data) > runtime.max_upload_bytes:
         raise ValueError(f"Файл больше {runtime.max_upload_bytes // (1024 * 1024)} МБ")
     art = validate_article(article)
+    limit = max_index if max_index is not None else 19
+    if index < 1 or index > limit:
+        raise ValueError(f"Номер фото: от 1 до {limit}")
+    was_new = not photo_slot_exists(
+        runtime, store_prefix=store_prefix, article=art, index=index
+    )
     target = photo_target_path(
         runtime.photos_dir,
         art,
@@ -316,7 +349,7 @@ def save_uploaded_photo(
         prefix_in_filename=runtime.prefix_in_filename,
     )
     LOG.info("Фото загружено: %s (%s байт)", rel, target.stat().st_size)
-    return rel
+    return rel, was_new
 
 
 def save_upload_batch(
@@ -325,18 +358,104 @@ def save_upload_batch(
     store_prefix: str,
     article: str,
     items: list[tuple[int, bytes]],
+    max_index: int | None = None,
+    contributor_user_id: int | None = None,
 ) -> UploadResult:
     if not items:
         raise ValueError("Нет фото для отправки")
     saved: list[str] = []
+    points = 0
     art = validate_article(article)
+    from avito.photo_upload import db as photo_db
+
     for index, data in items:
-        rel = save_uploaded_photo(
+        rel, was_new = save_uploaded_photo(
             runtime,
             store_prefix=store_prefix,
             article=art,
             index=index,
             data=data,
+            max_index=max_index,
         )
         saved.append(rel)
-    return UploadResult(saved=saved, article=art)
+        if (
+            contributor_user_id is not None
+            and was_new
+            and runtime.points_per_photo > 0
+        ):
+            with runtime.db() as conn:
+                photo_db.add_points(
+                    conn,
+                    user_id=contributor_user_id,
+                    delta=runtime.points_per_photo,
+                    reason="Загрузка фото",
+                    article=art,
+                    photo_index=index,
+                )
+            points += runtime.points_per_photo
+
+    balance = None
+    if contributor_user_id is not None:
+        with runtime.db() as conn:
+            balance = photo_db.user_balance(conn, contributor_user_id)
+
+    return UploadResult(
+        saved=saved, article=art, points_awarded=points, balance=balance
+    )
+
+
+def list_photo_files(
+    runtime: PhotoUploadRuntime,
+    *,
+    folder: str = "",
+    article: str = "",
+    limit: int = 80,
+) -> list[dict]:
+    """Список файлов в photos_dir для админки."""
+    root = runtime.photos_dir
+    if not root.is_dir():
+        return []
+    folders = [runtime.contributors_prefix] + [s.prefix for s in runtime.stores]
+    folder = folder.strip().lower()
+    art = article.strip()
+    out: list[dict] = []
+    search_dirs: list[Path]
+    if folder and folder in folders:
+        search_dirs = [root / folder]
+    else:
+        search_dirs = [root / f for f in folders]
+    for d in search_dirs:
+        if not d.is_dir():
+            continue
+        for path in sorted(d.glob("*.jpg"), key=lambda p: p.stat().st_mtime, reverse=True):
+            name = path.name
+            if art and not (name.startswith(art + ".") or name.startswith(art + "-")):
+                continue
+            rel = path.relative_to(root).as_posix()
+            st = path.stat()
+            out.append(
+                {
+                    "relative_path": rel,
+                    "folder": path.parent.name,
+                    "filename": name,
+                    "size": st.st_size,
+                    "mtime": int(st.st_mtime),
+                }
+            )
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def delete_photo_file(runtime: PhotoUploadRuntime, relative_path: str) -> str:
+    rel = Path(relative_path.replace("\\", "/"))
+    if rel.is_absolute() or ".." in rel.parts:
+        raise ValueError("Некорректный путь")
+    target = (runtime.photos_dir / rel).resolve()
+    root = runtime.photos_dir.resolve()
+    if not str(target).startswith(str(root)):
+        raise ValueError("Путь вне папки фото")
+    if not target.is_file():
+        raise ValueError("Файл не найден")
+    target.unlink()
+    return rel.as_posix()

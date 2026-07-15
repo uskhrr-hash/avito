@@ -88,6 +88,10 @@ photo_upload:
   session_max_age_hours: 72
   max_upload_mb: 12
   public_mount_path: /photo
+  db_path: data/photo_upload.db
+  contributors_prefix: contributors
+  points_per_photo: 10
+  contributor_max_photos: 10
 
 compare:
   stock_only: true

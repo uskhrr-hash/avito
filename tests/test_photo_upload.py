@@ -98,6 +98,10 @@ photo_upload:
   stores:
     md: pass-md
     pg: pass-pg
+  admin:
+    login: admin
+    password: admin-pass
+    display_name: Админ
 """.strip(),
             encoding="utf-8",
         )
@@ -189,7 +193,7 @@ photo_upload:
             image = Image.new("RGB", (120, 80), color=(200, 10, 10))
             buf = BytesIO()
             image.save(buf, format="JPEG")
-            rel = save_uploaded_photo(
+            rel, was_new = save_uploaded_photo(
                 runtime,
                 store_prefix="md",
                 article="124889",
@@ -197,8 +201,18 @@ photo_upload:
                 data=buf.getvalue(),
             )
             self.assertEqual(rel, "md/124889.jpg")
+            self.assertTrue(was_new)
             saved = runtime.photos_dir / "md" / "124889.jpg"
             self.assertTrue(saved.is_file())
+            rel2, was_new2 = save_uploaded_photo(
+                runtime,
+                store_prefix="md",
+                article="124889",
+                index=1,
+                data=buf.getvalue(),
+            )
+            self.assertEqual(rel2, "md/124889.jpg")
+            self.assertFalse(was_new2)
 
 
 class TestServerHttpsUrls(unittest.TestCase):

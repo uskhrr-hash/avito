@@ -1,14 +1,19 @@
 """Настройки и пароли для веб-загрузки фото."""
 from __future__ import annotations
 
+import logging
 import secrets
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from avito.config import AppConfig, load_config
+from avito.photo_upload import db as photo_db
 from avito.stores import StoresConfig
+
+LOG = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -36,6 +41,19 @@ class PhotoUploadRuntime:
     jpeg_max_dimension: int
     max_upload_bytes: int
     public_mount_path: str
+    db_path: Path
+    contributors_prefix: str
+    points_per_photo: int
+    contributor_max_photos: int
+
+    def db(self) -> sqlite3.Connection:
+        conn = photo_db.connect(self.db_path)
+        photo_db.init_db(conn)
+        return conn
+
+    def close_db(self, conn: sqlite3.Connection | None = None) -> None:
+        if conn is not None:
+            conn.close()
 
 
 def load_photo_upload_runtime(
@@ -89,7 +107,13 @@ def load_photo_upload_runtime(
     max_mb = max(1, app.photo_upload.max_upload_mb)
     stores_config = app.stores
 
-    return PhotoUploadRuntime(
+    db_path = app.photo_upload.db_path
+    if not db_path.is_absolute():
+        db_path = root / db_path
+
+    contrib = app.photo_upload.contributors_prefix.strip() or "contributors"
+
+    runtime = PhotoUploadRuntime(
         project_root=root,
         config=app,
         stores_config=stores_config,
@@ -105,4 +129,28 @@ def load_photo_upload_runtime(
         jpeg_max_dimension=app.autoload.jpeg_max_dimension,
         max_upload_bytes=max_mb * 1024 * 1024,
         public_mount_path=app.photo_upload.public_mount_path,
+        db_path=db_path,
+        contributors_prefix=contrib,
+        points_per_photo=app.photo_upload.points_per_photo,
+        contributor_max_photos=app.photo_upload.contributor_max_photos,
     )
+
+    admin_cfg = pu_secrets.get("admin") or {}
+    admin_login = str(admin_cfg.get("login", "")).strip()
+    admin_password = str(admin_cfg.get("password", "")).strip()
+    admin_name = str(admin_cfg.get("display_name", "Админ")).strip() or "Админ"
+    if admin_login and admin_password:
+        conn = runtime.db()
+        try:
+            photo_db.bootstrap_admin(
+                conn,
+                login=admin_login,
+                password=admin_password,
+                display_name=admin_name,
+            )
+        except Exception:
+            LOG.exception("Не удалось создать admin из secrets")
+        finally:
+            conn.close()
+
+    return runtime

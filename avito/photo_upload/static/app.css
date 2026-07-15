@@ -582,3 +582,19 @@ body.is-loading {
     padding-top: 20px;
   }
 }
+
+.login-divider {
+  border: none;
+  border-top: 1px solid #e5e7eb;
+  margin: 14px 0;
+}
+
+.topbar-points {
+  margin-top: 4px;
+  font-size: 0.9rem;
+}
+
+.topbar-points .muted {
+  color: #94a3b8;
+  font-size: 0.8rem;
+}

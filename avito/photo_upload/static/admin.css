@@ -1,0 +1,92 @@
+.page-admin .shell {
+  max-width: 720px;
+}
+
+.admin-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px 0;
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.admin-tab {
+  flex: 1;
+  border: 1px solid #d1d5db;
+  background: #fff;
+  border-radius: 10px;
+  padding: 10px 8px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.admin-tab.active {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+
+.admin-panel h2 {
+  margin: 0 0 12px;
+  font-size: 1.05rem;
+}
+
+.admin-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-form.row-form {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: end;
+}
+
+.admin-form.row-form .field {
+  flex: 1;
+  min-width: 120px;
+}
+
+.admin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fafafa;
+}
+
+.admin-row .meta {
+  font-size: 0.85rem;
+  color: #6b7280;
+}
+
+.admin-row .actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.admin-thumb {
+  width: 56px;
+  height: 56px;
+  object-fit: cover;
+  border-radius: 8px;
+  background: #111;
+}
+
+.admin-row.inactive {
+  opacity: 0.55;
+}
+
+.points-pos { color: #15803d; font-weight: 700; }
+.points-neg { color: #b91c1c; font-weight: 700; }

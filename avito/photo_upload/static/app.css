@@ -45,6 +45,38 @@ body.page-app {
   padding: 12px 14px 16px;
 }
 
+.kind-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  background: #f3f4f6;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.kind-tab {
+  min-height: 40px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.kind-tab.is-active {
+  background: #fff;
+  border-color: var(--border);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.kind-tab:active {
+  opacity: 0.9;
+}
+
 .page-app .shell {
   padding-bottom: 8px;
 }
@@ -209,13 +241,20 @@ select:focus {
   top: 0;
   z-index: 20;
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
   padding: max(10px, var(--safe-top)) 14px 10px;
   background: rgba(255, 255, 255, 0.97);
   border-bottom: 1px solid var(--border);
   backdrop-filter: blur(10px);
+}
+
+.topbar-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
 }
 
 .topbar-title {
@@ -234,6 +273,26 @@ select:focus {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+}
+
+.topbar-guide {
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--primary);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #eff6ff;
+  white-space: nowrap;
+}
+
+.topbar-guide:active {
+  opacity: 0.85;
+}
+
+.topbar-actions .btn-ghost {
+  min-height: 40px;
+  padding: 10px 14px;
 }
 
 .row-between {

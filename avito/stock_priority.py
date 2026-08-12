@@ -26,8 +26,19 @@ DEFAULT_ALLOWED_SUPPLIERS = frozenset(
     }
 )
 
-REGISTER_QUERY = """
-select p.name as product, r.product_id, s.name as supplier, r.price, r.quantity
+# Шины: parent_id=1, type 2/3 (как раньше).
+_REGISTER_TIRES_SELECT = """
+select p.name as product, r.product_id, s.name as supplier, r.price, r.quantity,
+       'tire'::text as kind,
+       null::text as brand,
+       null::text as model,
+       null::text as wheel_type,
+       null::text as width,
+       null::text as diameter,
+       null::text as studs,
+       null::text as circle,
+       null::text as et,
+       null::text as hub
 from logistics.register r
 join products p on r.product_id = p.id
 join products m on p.parent_id = m.id
@@ -35,6 +46,55 @@ join products b on m.parent_id = b.id
 join logistics.suppliers s on r.supplier_id = s.id
 where b.parent_id = 1 and m.params->>'type' in ('2', '3')
 """
+
+# Диски: parent_id=2; type 1=сталь, 2=литьё, 3=ковка (опционально), 4=груз — не берём.
+_REGISTER_WHEELS_SELECT = """
+select p.name as product, r.product_id, s.name as supplier, r.price, r.quantity,
+       'wheel'::text as kind,
+       b.name as brand,
+       m.name as model,
+       COALESCE(m.params->>'type', b.params->>'type') as wheel_type,
+       p.params->>'width' as width,
+       p.params->>'diameter' as diameter,
+       p.params->>'studs' as studs,
+       p.params->>'circle' as circle,
+       p.params->>'et' as et,
+       p.params->>'hub' as hub
+from logistics.register r
+join products p on r.product_id = p.id
+join products m on p.parent_id = m.id
+join products b on m.parent_id = b.id
+join logistics.suppliers s on r.supplier_id = s.id
+where b.parent_id = 2
+  and COALESCE(m.params->>'type', b.params->>'type') in ({wheel_types})
+"""
+
+# Обратная совместимость: только шины (если wheels.enabled=false).
+REGISTER_QUERY = _REGISTER_TIRES_SELECT.strip()
+
+
+def build_register_query(
+    *,
+    wheels_enabled: bool = False,
+    wheel_types: tuple[str, ...] = ("1", "2", "3"),
+) -> str:
+    """SQL реестра: шины и опционально диски (сталь/литьё/ковка)."""
+    tires = _REGISTER_TIRES_SELECT.strip()
+    if not wheels_enabled:
+        return tires
+    return f"{tires}\nunion all\n{register_wheels_query(wheel_types=wheel_types)}"
+
+
+def register_wheels_query(*, wheel_types: tuple[str, ...] = ("1", "2", "3")) -> str:
+    types = tuple(str(t).strip() for t in wheel_types if str(t).strip())
+    if not types:
+        types = ("1", "2")
+    types_sql = ", ".join(f"'{t}'" for t in types)
+    return _REGISTER_WHEELS_SELECT.format(wheel_types=types_sql).strip()
+
+
+def register_tires_query() -> str:
+    return _REGISTER_TIRES_SELECT.strip()
 
 
 @dataclass(frozen=True)
@@ -44,6 +104,16 @@ class RegisterLine:
     supplier: str
     price: float
     quantity: float
+    kind: str = "tire"
+    brand: str = ""
+    model: str = ""
+    wheel_type: str = ""
+    width: str = ""
+    diameter: str = ""
+    studs: str = ""
+    circle: str = ""
+    et: str = ""
+    hub: str = ""
 
 
 @dataclass(frozen=True)
@@ -69,6 +139,16 @@ class PriorityResult:
     supplier: str
     ushk_in_stock: bool = False
     sam_mb_cash_price: bool = False
+    kind: str = "tire"
+    brand: str = ""
+    model: str = ""
+    wheel_type: str = ""
+    width: str = ""
+    diameter: str = ""
+    studs: str = ""
+    circle: str = ""
+    et: str = ""
+    hub: str = ""
 
 
 def is_ushk_supplier(supplier: str, *, prefix: str = "УШК") -> bool:
@@ -143,12 +223,15 @@ def articles_with_sam_mb_cash_stock(
     lines: list[RegisterLine],
     cfg: StockPriorityConfig,
 ) -> frozenset[str]:
-    out: set[str] = set()
+    by_article: dict[str, list[RegisterLine]] = {}
     for line in lines:
-        if article_has_sam_mb_cash_stock(line.article, lines, cfg):
-            art = str(line.article).strip()
-            if art:
-                out.add(art)
+        art = str(line.article).strip()
+        if art:
+            by_article.setdefault(art, []).append(line)
+    out: set[str] = set()
+    for art, art_lines in by_article.items():
+        if article_has_sam_mb_cash_stock(art, art_lines, cfg):
+            out.add(art)
     return frozenset(out)
 
 
@@ -171,6 +254,72 @@ def is_seller_star_source(source: str) -> bool:
     return s[3:] in SELLER_STAR_PRIORITIES
 
 
+def _meta_from_lines(lines: list[RegisterLine]) -> dict[str, str]:
+    """kind/brand/params — с любой строки артикула (одинаковый product)."""
+    for line in lines:
+        kind = str(line.kind or "tire").strip() or "tire"
+        if kind == "wheel" or line.brand or line.width or line.diameter:
+            return {
+                "kind": kind if kind in ("tire", "wheel") else "wheel",
+                "brand": str(line.brand or "").strip(),
+                "model": str(line.model or "").strip(),
+                "wheel_type": str(line.wheel_type or "").strip(),
+                "width": str(line.width or "").strip(),
+                "diameter": str(line.diameter or "").strip(),
+                "studs": str(line.studs or "").strip(),
+                "circle": str(line.circle or "").strip(),
+                "et": str(line.et or "").strip(),
+                "hub": str(line.hub or "").strip(),
+            }
+    kind0 = str(lines[0].kind or "tire").strip() or "tire" if lines else "tire"
+    return {
+        "kind": kind0 if kind0 in ("tire", "wheel") else "tire",
+        "brand": "",
+        "model": "",
+        "wheel_type": "",
+        "width": "",
+        "diameter": "",
+        "studs": "",
+        "circle": "",
+        "et": "",
+        "hub": "",
+    }
+
+
+def _priority_result(
+    *,
+    article: str,
+    name: str,
+    base_price: float,
+    quantity: str,
+    priority: str,
+    supplier: str,
+    ushk_in_stock: bool,
+    sam_mb_cash_price: bool,
+    meta: dict[str, str],
+) -> PriorityResult:
+    return PriorityResult(
+        article=article,
+        name=name,
+        base_price=base_price,
+        quantity=quantity,
+        priority=priority,
+        supplier=supplier,
+        ushk_in_stock=ushk_in_stock,
+        sam_mb_cash_price=sam_mb_cash_price,
+        kind=meta.get("kind", "tire"),
+        brand=meta.get("brand", ""),
+        model=meta.get("model", ""),
+        wheel_type=meta.get("wheel_type", ""),
+        width=meta.get("width", ""),
+        diameter=meta.get("diameter", ""),
+        studs=meta.get("studs", ""),
+        circle=meta.get("circle", ""),
+        et=meta.get("et", ""),
+        hub=meta.get("hub", ""),
+    )
+
+
 def resolve_register_article(
     article: str,
     name: str,
@@ -186,6 +335,7 @@ def resolve_register_article(
     if not active:
         return None
 
+    meta = _meta_from_lines(lines)
     ushk_ok = [
         line
         for line in active
@@ -213,7 +363,7 @@ def resolve_register_article(
 
     if has_ushk and has_ufa:
         row = ufa_ok[0]
-        return PriorityResult(
+        return _priority_result(
             article=article,
             name=name,
             base_price=round(row.price * cfg.ufa_multiplier, 2),
@@ -222,11 +372,12 @@ def resolve_register_article(
             supplier=row.supplier,
             ushk_in_stock=ushk_in_stock,
             sam_mb_cash_price=sam_mb_cash_price,
+            meta=meta,
         )
 
     if has_ufa:
         row = ufa_ok[0]
-        return PriorityResult(
+        return _priority_result(
             article=article,
             name=name,
             base_price=round(row.price * cfg.ufa_multiplier, 2),
@@ -235,11 +386,12 @@ def resolve_register_article(
             supplier=row.supplier,
             ushk_in_stock=ushk_in_stock,
             sam_mb_cash_price=sam_mb_cash_price,
+            meta=meta,
         )
 
     if has_moscow and has_ushk:
         row = moscow_ok[0]
-        return PriorityResult(
+        return _priority_result(
             article=article,
             name=name,
             base_price=round(row.price * cfg.moscow_multiplier, 2),
@@ -248,11 +400,12 @@ def resolve_register_article(
             supplier=row.supplier,
             ushk_in_stock=ushk_in_stock,
             sam_mb_cash_price=sam_mb_cash_price,
+            meta=meta,
         )
 
     if has_ushk:
         row = ushk_ok[0]
-        return PriorityResult(
+        return _priority_result(
             article=article,
             name=name,
             base_price=round(row.price, 2),
@@ -261,13 +414,14 @@ def resolve_register_article(
             supplier=row.supplier,
             ushk_in_stock=ushk_in_stock,
             sam_mb_cash_price=sam_mb_cash_price,
+            meta=meta,
         )
 
     if not eligible:
         return None
 
     row = min(eligible, key=lambda line: line.price)
-    return PriorityResult(
+    return _priority_result(
         article=article,
         name=name,
         base_price=round(row.price, 2),
@@ -276,6 +430,7 @@ def resolve_register_article(
         supplier=row.supplier,
         ushk_in_stock=ushk_in_stock,
         sam_mb_cash_price=sam_mb_cash_price,
+        meta=meta,
     )
 
 

@@ -9,6 +9,11 @@ User=root
 WorkingDirectory=/opt/avito_tires_parser
 Environment=TZ=Asia/Yekaterinburg
 Environment=PYTHONUNBUFFERED=1
+# Не вытеснять booking/gunicorn на 2 CPU
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+CPUQuota=70%
 ExecStart=/bin/bash /opt/avito_tires_parser/deploy/run-daily.sh
 
 [Install]

@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const STATIC_VERSION = "3";
+  const STATIC_VERSION = "4";
 
   const articleInput = document.getElementById("article");
   const articleHint = document.getElementById("article-hint");
@@ -29,6 +29,7 @@
   const cameraSystemBtn = document.getElementById("camera-system");
   const logoutBtn = document.getElementById("logout");
   const UPLOAD_LABEL = "Отправить на сервер";
+  const KIND_STORAGE_KEY = "photo_upload_kind";
 
   if (!articleInput || !uploadBtn || !queueList || !refreshQueueBtn) {
     console.error("photo upload: missing required DOM nodes");
@@ -42,6 +43,7 @@
   let hintTimer = null;
   /** @type {MediaStream | null} */
   let cameraStream = null;
+  let productKind = "tire";
 
   function showToast(message) {
     if (!toast) return;
@@ -77,6 +79,53 @@
   function storePrefix() {
     const session = window.PHOTO_UPLOAD_SESSION || {};
     return session.prefix || "md";
+  }
+
+  function currentKind() {
+    return productKind === "wheel" ? "wheel" : "tire";
+  }
+
+  function kindQuery() {
+    return "kind=" + encodeURIComponent(currentKind());
+  }
+
+  function emptyArticleHint() {
+    return currentKind() === "wheel"
+      ? "Введите артикул диска"
+      : "Введите артикул шины";
+  }
+
+  function clearPending() {
+    for (let i = 0; i < pending.length; i += 1) {
+      URL.revokeObjectURL(pending[i].url);
+    }
+    pending = [];
+    renderPending();
+  }
+
+  function setProductKind(kind, refresh) {
+    productKind = kind === "wheel" ? "wheel" : "tire";
+    try {
+      window.localStorage.setItem(KIND_STORAGE_KEY, productKind);
+    } catch (_err) {
+      /* ignore */
+    }
+    const tabs = document.querySelectorAll(".kind-tab");
+    for (let i = 0; i < tabs.length; i += 1) {
+      const active = tabs[i].getAttribute("data-kind") === productKind;
+      tabs[i].classList.toggle("is-active", active);
+      tabs[i].setAttribute("aria-selected", active ? "true" : "false");
+    }
+    if (articleHint && !currentArticle()) {
+      articleHint.textContent = emptyArticleHint();
+      articleHint.className = "hint";
+    }
+    if (refresh) {
+      clearPending();
+      lookupArticle();
+      loadQueue();
+      scheduleNextShotHint();
+    }
   }
 
   function scheduleNextShotHint() {
@@ -130,13 +179,16 @@
     const article = currentArticle();
     if (!articleHint) return;
     if (!article) {
-      articleHint.textContent = "Введите артикул шины";
+      articleHint.textContent = emptyArticleHint();
       articleHint.className = "hint";
       return;
     }
     try {
       const response = await fetch(
-        "api/stock/lookup?article=" + encodeURIComponent(article)
+        "api/stock/lookup?article=" +
+          encodeURIComponent(article) +
+          "&" +
+          kindQuery()
       );
       if (!response.ok) return;
       const data = await response.json();
@@ -163,7 +215,9 @@
       return;
     }
     try {
-      const response = await fetch("api/stock/search?q=" + encodeURIComponent(q));
+      const response = await fetch(
+        "api/stock/search?q=" + encodeURIComponent(q) + "&" + kindQuery()
+      );
       if (!response.ok) return;
       const rows = await response.json();
       if (!rows.length) {
@@ -199,7 +253,10 @@
 
   async function nextIndexForArticle(article) {
     const response = await fetch(
-      "api/next-index?article=" + encodeURIComponent(article)
+      "api/next-index?article=" +
+        encodeURIComponent(article) +
+        "&" +
+        kindQuery()
     );
     if (!response.ok) {
       throw new Error("Не удалось получить номер фото");
@@ -218,14 +275,21 @@
       meta.index += 1;
       meta.filename =
         meta.index === 1 ? article + ".jpg" : article + "-" + meta.index + ".jpg";
-      meta.relative_path = storePrefix() + "/" + meta.filename;
+      meta.relative_path =
+        (currentKind() === "wheel" ? "wheels/" : "") +
+        storePrefix() +
+        "/" +
+        meta.filename;
     }
     return meta;
   }
 
   async function fetchShotGuide(index) {
     const response = await fetch(
-      "api/shot-guide?index=" + encodeURIComponent(String(index))
+      "api/shot-guide?index=" +
+        encodeURIComponent(String(index)) +
+        "&" +
+        kindQuery()
     );
     if (!response.ok) {
       throw new Error("Не удалось загрузить подсказку кадра");
@@ -472,6 +536,7 @@
 
     const formData = new FormData();
     formData.append("article", article);
+    formData.append("kind", currentKind());
     formData.append(
       "indices",
       pending
@@ -541,7 +606,7 @@
 
   async function loadQueue() {
     queueList.innerHTML = "<p class='muted'>Загрузка списка…</p>";
-    const params = new URLSearchParams({ limit: "80" });
+    const params = new URLSearchParams({ limit: "80", kind: currentKind() });
     if (inStoreOnly && inStoreOnly.checked) {
       params.set("in_store", "1");
     }
@@ -624,6 +689,22 @@
   if (inStoreOnly) {
     inStoreOnly.addEventListener("change", loadQueue);
   }
+
+  const kindTabs = document.querySelectorAll(".kind-tab");
+  for (let i = 0; i < kindTabs.length; i += 1) {
+    kindTabs[i].addEventListener("click", function () {
+      const next = kindTabs[i].getAttribute("data-kind") || "tire";
+      if (next === currentKind()) return;
+      setProductKind(next, true);
+    });
+  }
+  let savedKind = "tire";
+  try {
+    savedKind = window.localStorage.getItem(KIND_STORAGE_KEY) || "tire";
+  } catch (_err) {
+    savedKind = "tire";
+  }
+  setProductKind(savedKind, false);
 
   renderPending();
   loadQueue();

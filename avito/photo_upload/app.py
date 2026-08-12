@@ -1,6 +1,7 @@
 """FastAPI-приложение для загрузки фото с телефона."""
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
@@ -16,17 +17,21 @@ from avito.photo_upload import db as photo_db
 from avito.photo_upload.admin import render_admin_html
 from avito.photo_upload.guide import render_guide_html
 from avito.photo_upload.overlays import (
-    EXAMPLE_FILES,
+    example_url_for_shot,
     ghost_image_for_shot,
     overlay_svg_for_shot,
     shot_label,
 )
 from avito.photo_upload.service import (
+    DEFAULT_SEARCH_LIMIT,
+    MAX_SEARCH_LIMIT,
+    MAX_UPLOAD_BATCH,
     delete_photo_file,
     list_photo_files,
     load_no_photos_queue_info,
     lookup_stock,
     next_photo_index,
+    normalize_product_kind,
     pending_photo_meta,
     save_upload_batch,
     search_stock,
@@ -139,6 +144,16 @@ def _require_admin(
     return ident
 
 
+def _require_catalog(
+    request: Request, runtime: PhotoUploadRuntime
+) -> SessionIdentity:
+    """Админ или пароль магазина: товары + файлы (цены/удаление)."""
+    ident = _require_identity(request, runtime)
+    if ident.role not in (ROLE_ADMIN, ROLE_STORE):
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    return ident
+
+
 def _max_index_for(ident: SessionIdentity, runtime: PhotoUploadRuntime) -> int:
     if ident.role == ROLE_CONTRIBUTOR:
         return runtime.contributor_max_photos
@@ -151,24 +166,31 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         SessionMiddleware,
         secret_key=runtime.session_secret,
         max_age=runtime.config.photo_upload.session_max_age_hours * 3600,
-        https_only=False,
+        # Photo UI is served over HTTPS (avito.shinaufa.ru/photo/).
+        # Secure cookie prevents session theft on plain HTTP.
+        https_only=True,
         same_site="lax",
     )
     app.state.runtime = runtime
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
     @app.get("/api/shot-guide")
-    async def api_shot_guide(index: int = 1) -> JSONResponse:
+    async def api_shot_guide(index: int = 1, kind: str = "tire") -> JSONResponse:
         idx = max(1, int(index))
-        meta = shot_label(idx)
+        product_kind = normalize_product_kind(kind)
+        meta = shot_label(idx, product_kind=product_kind)
+        example = example_url_for_shot(idx, product_kind=product_kind)
         return JSONResponse(
             {
                 "index": idx,
+                "kind": product_kind,
                 "title": meta["title"],
                 "hint": meta["hint"],
                 "short": meta["short"],
-                "overlay_svg": overlay_svg_for_shot(idx, camera=True),
-                "example_url": EXAMPLE_FILES.get(idx, ""),
+                "overlay_svg": overlay_svg_for_shot(
+                    idx, camera=True, product_kind=product_kind
+                ),
+                "example_url": example,
                 "ghost_url": ghost_image_for_shot(idx),
             }
         )
@@ -263,11 +285,14 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         return JSONResponse(payload)
 
     @app.get("/api/stock/lookup")
-    async def api_stock_lookup(request: Request, article: str = "") -> JSONResponse:
+    async def api_stock_lookup(
+        request: Request, article: str = "", kind: str = "tire"
+    ) -> JSONResponse:
         _require_uploader(request, runtime)
-        item = lookup_stock(runtime, article)
+        product_kind = normalize_product_kind(kind)
+        item = lookup_stock(runtime, article, kind=product_kind)
         if item is None:
-            return JSONResponse({"found": False})
+            return JSONResponse({"found": False, "kind": product_kind})
         return JSONResponse(
             {
                 "found": True,
@@ -275,13 +300,18 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 "nomenclature": item.nomenclature,
                 "quantity": item.quantity,
                 "star": item.star,
+                "kind": item.kind,
             }
         )
 
     @app.get("/api/stock/search")
-    async def api_stock_search(request: Request, q: str = "") -> JSONResponse:
+    async def api_stock_search(
+        request: Request, q: str = "", kind: str = "tire", limit: int = DEFAULT_SEARCH_LIMIT
+    ) -> JSONResponse:
         _require_uploader(request, runtime)
-        rows = search_stock(runtime, q)
+        product_kind = normalize_product_kind(kind)
+        limit_n = max(1, min(int(limit or DEFAULT_SEARCH_LIMIT), MAX_SEARCH_LIMIT))
+        rows = search_stock(runtime, q, kind=product_kind, limit=limit_n)
         return JSONResponse(
             [
                 {
@@ -289,6 +319,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                     "nomenclature": r.nomenclature,
                     "quantity": r.quantity,
                     "star": r.star,
+                    "kind": r.kind,
                 }
                 for r in rows
             ]
@@ -299,10 +330,16 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         request: Request,
         limit: int = 80,
         in_store: int = 0,
+        kind: str = "tire",
     ) -> JSONResponse:
         ident = _require_uploader(request, runtime)
         want_in_store = bool(in_store)
         ushk_override: str | None = None
+        product_kind = normalize_product_kind(kind)
+        limit_n = int(limit) if limit else 80
+        if limit_n <= 0:
+            limit_n = 80
+        limit_n = min(limit_n, 200)
 
         if ident.role == ROLE_CONTRIBUTOR:
             # Все артикулы без фото (md/pg), фильтр «в магазине» — по складу сотрудника
@@ -318,9 +355,10 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         result = load_no_photos_queue_info(
             runtime,
             store_prefix=store_prefix,
-            limit=min(limit, 200),
+            limit=limit_n,
             in_store_only=in_store_only,
             ushk_supplier=ushk_override,
+            kind=product_kind,
         )
         return JSONResponse(
             {
@@ -331,6 +369,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                         "stores": r.stores,
                         "problem": r.problem,
                         "star": r.star,
+                        "kind": r.kind,
                     }
                     for r in result.items
                 ],
@@ -339,13 +378,17 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 "count": len(result.items),
                 "in_store_only": in_store_only,
                 "ushk_supplier": ushk_override,
+                "kind": product_kind,
             }
         )
 
     @app.get("/api/next-index")
-    async def api_next_index(request: Request, article: str = "") -> JSONResponse:
+    async def api_next_index(
+        request: Request, article: str = "", kind: str = "tire"
+    ) -> JSONResponse:
         ident = _require_uploader(request, runtime)
         art = validate_article(article)
+        product_kind = normalize_product_kind(kind)
         max_idx = _max_index_for(ident, runtime)
         try:
             idx = next_photo_index(
@@ -353,6 +396,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 store_prefix=ident.prefix,
                 article=art,
                 max_index=max_idx,
+                product_kind=product_kind,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -362,12 +406,14 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
             article=art,
             index=idx,
             max_index=max_idx,
+            product_kind=product_kind,
         )
         return JSONResponse(
             {
                 "index": meta.index,
                 "filename": meta.filename,
                 "relative_path": meta.relative_path,
+                "kind": product_kind,
             }
         )
 
@@ -377,9 +423,11 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         article: str = Form(...),
         indices: str = Form(...),
         files: list[UploadFile] = File(...),
+        kind: str = Form("tire"),
     ) -> JSONResponse:
         ident = _require_uploader(request, runtime)
         art = validate_article(article)
+        product_kind = normalize_product_kind(kind)
         max_idx = _max_index_for(ident, runtime)
         try:
             index_list = [int(x.strip()) for x in indices.split(",") if x.strip()]
@@ -389,6 +437,11 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
             raise HTTPException(status_code=400, detail="Нет номеров фото")
         if len(index_list) != len(files):
             raise HTTPException(status_code=400, detail="Число файлов и номеров не совпадает")
+        if len(index_list) > MAX_UPLOAD_BATCH:
+            raise HTTPException(
+                status_code=400,
+                detail=f"За один раз не больше {MAX_UPLOAD_BATCH} фото",
+            )
 
         items: list[tuple[int, bytes]] = []
         for idx, upload in zip(index_list, files):
@@ -398,7 +451,8 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
             items.append((idx, data))
 
         try:
-            result = save_upload_batch(
+            result = await asyncio.to_thread(
+                save_upload_batch,
                 runtime,
                 store_prefix=ident.prefix,
                 article=art,
@@ -407,6 +461,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 contributor_user_id=(
                     ident.user_id if ident.role == ROLE_CONTRIBUTOR else None
                 ),
+                product_kind=product_kind,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -418,6 +473,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 "saved": result.saved,
                 "points_awarded": result.points_awarded,
                 "balance": result.balance,
+                "kind": product_kind,
             }
         )
 
@@ -605,7 +661,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
     async def admin_photos(
         request: Request, folder: str = "", article: str = "", limit: int = 80
     ) -> JSONResponse:
-        _require_admin(request, runtime)
+        _require_catalog(request, runtime)
         items = list_photo_files(
             runtime, folder=folder, article=article, limit=min(limit, 200)
         )
@@ -613,7 +669,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
 
     @app.post("/api/admin/photos/delete")
     async def admin_photos_delete(request: Request) -> JSONResponse:
-        _require_admin(request, runtime)
+        _require_catalog(request, runtime)
         payload = await request.json()
         try:
             deleted = delete_photo_file(
@@ -622,6 +678,108 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"ok": True, "deleted": deleted})
+
+    @app.get("/api/admin/listings")
+    async def admin_listings(
+        request: Request,
+        folder: str = "",
+        q: str = "",
+        only_manual: int = 0,
+        has_photos: str = "",
+        limit: int = 300,
+        offset: int = 0,
+    ) -> JSONResponse:
+        """Товары из остатков + ручные/расчётные цены (с фото и без)."""
+        _require_catalog(request, runtime)
+        from avito.photo_upload.service import list_products
+
+        items, total = list_products(
+            runtime,
+            folder=folder,
+            query=q,
+            only_manual=bool(only_manual),
+            has_photos=has_photos,
+            limit=max(0, int(limit)),
+            offset=max(0, int(offset or 0)),
+        )
+        return JSONResponse(
+            {"items": items, "count": len(items), "total": total}
+        )
+
+    @app.get("/api/admin/manual-price/{article}")
+    async def admin_get_manual_price(
+        request: Request, article: str
+    ) -> JSONResponse:
+        _require_catalog(request, runtime)
+        from avito.stock_db import get_manual_price_row, stock_connection
+        from avito.photo_upload.service import validate_article
+
+        art = validate_article(article)
+        with stock_connection(
+            runtime.stock_db_path, schema_path=runtime.stock_db_schema
+        ) as conn:
+            row = get_manual_price_row(conn, art)
+        if row is None:
+            return JSONResponse({"article": art, "manual_price": None})
+        return JSONResponse(
+            {
+                "article": row.article,
+                "manual_price": row.price,
+                "updated_at": row.updated_at,
+                "updated_by": row.updated_by,
+            }
+        )
+
+    @app.post("/api/admin/manual-price")
+    async def admin_set_manual_price(request: Request) -> JSONResponse:
+        ident = _require_catalog(request, runtime)
+        payload = await request.json()
+        from avito.stock_db import (
+            clear_manual_price,
+            set_manual_price,
+            stock_connection,
+        )
+        from avito.photo_upload.service import validate_article
+
+        try:
+            art = validate_article(str(payload.get("article", "")))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        clear = bool(payload.get("clear"))
+        if ident.role == ROLE_STORE:
+            by = f"store:{ident.prefix}"
+        else:
+            by = ident.label or "admin"
+        with stock_connection(
+            runtime.stock_db_path, schema_path=runtime.stock_db_schema
+        ) as conn:
+            if clear:
+                clear_manual_price(conn, art)
+                return JSONResponse(
+                    {"ok": True, "article": art, "manual_price": None}
+                )
+            raw_price = payload.get("price")
+            try:
+                price = float(raw_price)
+            except (TypeError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=400, detail="Укажите цену"
+                ) from exc
+            try:
+                row = set_manual_price(
+                    conn, art, price, updated_by=by
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(
+            {
+                "ok": True,
+                "article": row.article,
+                "manual_price": row.price,
+                "updated_at": row.updated_at,
+                "updated_by": row.updated_by,
+            }
+        )
 
     return app
 
@@ -692,6 +850,7 @@ def _login_html(runtime: PhotoUploadRuntime) -> str:
 def _app_html(runtime: PhotoUploadRuntime, ident: SessionIdentity) -> str:
     base = _mount_base(runtime)
     is_contrib = ident.role == ROLE_CONTRIBUTOR
+    is_store = ident.role == ROLE_STORE
     session = {
         "role": ident.role,
         "prefix": ident.prefix,
@@ -730,6 +889,70 @@ def _app_html(runtime: PhotoUploadRuntime, ident: SessionIdentity) -> str:
         <span>Есть в магазине (по реестру УШК)</span>
       </label>"""
 
+    store_tabs = ""
+    catalog_panels = ""
+    upload_open = ""
+    upload_close = ""
+    catalog_css = ""
+    catalog_js = ""
+    if is_store:
+        store_tabs = """
+  <nav class="admin-tabs store-tabs" role="tablist">
+    <button type="button" class="admin-tab active" data-tab="upload">Загрузка</button>
+    <button type="button" class="admin-tab" data-tab="listings">Товары</button>
+    <button type="button" class="admin-tab" data-tab="photos">Файлы</button>
+  </nav>"""
+        catalog_panels = """
+    <section id="tab-listings" class="admin-panel store-panel hidden">
+      <div class="card">
+        <h2>Товары</h2>
+        <p class="muted">Ручная цена — в объявление как есть. Без неё — входящая × 1.15.</p>
+        <form id="listings-filter" class="admin-form row-form">
+          <label class="field"><span>Поиск</span>
+            <input name="q" placeholder="артикул или название" autofocus>
+          </label>
+          <label class="field"><span>Фото</span>
+            <select name="has_photos">
+              <option value="">все</option>
+              <option value="1">с фото</option>
+              <option value="0">без фото</option>
+            </select>
+          </label>
+          <label class="field field-check"><span>Только с ручной ценой</span>
+            <input type="checkbox" name="only_manual" value="1">
+          </label>
+          <button type="submit" class="btn btn-secondary">Найти</button>
+        </form>
+        <p id="listings-meta" class="muted"></p>
+        <div id="listings-list" class="admin-list"></div>
+      </div>
+    </section>
+
+    <section id="tab-photos" class="admin-panel store-panel hidden">
+      <div class="card">
+        <h2>Файлы на сервере</h2>
+        <form id="photos-filter" class="admin-form row-form">
+          <label class="field"><span>Папка</span>
+            <select name="folder">
+              <option value="">все</option>
+              <option value="contributors">contributors</option>
+              <option value="md">md</option>
+              <option value="pg">pg</option>
+            </select>
+          </label>
+          <label class="field"><span>Артикул</span>
+            <input name="article" inputmode="numeric" placeholder="122062">
+          </label>
+          <button type="submit" class="btn btn-secondary">Найти</button>
+        </form>
+        <div id="photos-list" class="admin-list"></div>
+      </div>
+    </section>"""
+        upload_open = '<section id="tab-upload" class="store-panel">'
+        upload_close = "</section>"
+        catalog_css = " page-store-catalog"
+        catalog_js = '\n  <script src="static/admin.js?v=6"></script>'
+
     return f"""<!DOCTYPE html>
 <html lang="ru">
 <head>
@@ -740,23 +963,32 @@ def _app_html(runtime: PhotoUploadRuntime, ident: SessionIdentity) -> str:
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <base href="{base}">
   <title>Фото — {ident.label}</title>
-  <link rel="stylesheet" href="static/app.css">
-  <link rel="stylesheet" href="static/camera.css?v=4">
+  <link rel="stylesheet" href="static/app.css?v=10">
+  <link rel="stylesheet" href="static/camera.css?v=5">
+  <link rel="stylesheet" href="static/admin.css?v=4">
 </head>
-<body class="page-app">
+<body class="page-app{catalog_css}">
   <header class="topbar">
-    <div>
-      <div class="topbar-title">Фото Avito</div>
-      <div class="topbar-sub">{ident.label}</div>
-      {points_bar}
-    </div>
-    <div class="topbar-actions">
-      <a href="guide" class="topbar-guide">Стандарт</a>
-      <button type="button" id="logout" class="btn btn-ghost">Выйти</button>
+    <div class="topbar-row">
+      <div>
+        <div class="topbar-title">Фото Avito</div>
+        <div class="topbar-sub">{ident.label}</div>
+        {points_bar}
+      </div>
+      <div class="topbar-actions">
+        <a href="guide" class="topbar-guide">Стандарт</a>
+        <button type="button" id="logout" class="btn btn-ghost">Выйти</button>
+      </div>
     </div>
   </header>
+  {store_tabs}
 
   <main class="shell">
+    {upload_open}
+    <div class="kind-tabs" role="tablist" aria-label="Тип товара">
+      <button type="button" class="kind-tab is-active" data-kind="tire" role="tab" aria-selected="true">Шины</button>
+      <button type="button" class="kind-tab" data-kind="wheel" role="tab" aria-selected="false">Диски</button>
+    </div>
     <section class="card card-article">
       <label class="field">
         <span>Артикул</span>
@@ -787,9 +1019,11 @@ def _app_html(runtime: PhotoUploadRuntime, ident: SessionIdentity) -> str:
       <button type="button" id="refresh-queue" class="btn btn-ghost btn-block">Обновить список</button>
       <div id="queue-list" class="queue-list"></div>
     </details>
+    {upload_close}
+    {catalog_panels}
   </main>
 
-  <div class="bottom-bar">
+  <div class="bottom-bar" id="upload-bar">
     <button type="button" id="upload" class="btn btn-primary" disabled>Отправить на сервер</button>
   </div>
 
@@ -823,6 +1057,6 @@ def _app_html(runtime: PhotoUploadRuntime, ident: SessionIdentity) -> str:
   </div>
 
   <script>window.PHOTO_UPLOAD_SESSION = {store_json};</script>
-  <script src="static/app.js?v=7"></script>
+  <script src="static/app.js?v=10"></script>{catalog_js}
 </body>
 </html>"""

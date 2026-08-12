@@ -42,6 +42,8 @@ log "START daily pipeline"
 run_step "build_stock" "$PYTHON" build_stock.py
 run_step "process_manager_inbox" "$PYTHON" process_manager_inbox.py
 run_step "compare_prices" "$PYTHON" compare_prices.py
+# Достроить индекс фото (только новые ключи; без полного обхода shinaufa)
+run_step "warm_shinaufa_photos" "$PYTHON" warm_shinaufa_photos.py --only-missing
 run_step "build_autoload" "$PYTHON" build_autoload.py
 run_step "publish_avito_feed" "$PYTHON" scripts/publish_avito_feed.py
 log "DONE daily pipeline"

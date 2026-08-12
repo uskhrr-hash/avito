@@ -6,7 +6,6 @@ stores_file: stores.yaml
 
 # Диски рядом с шинами. Disable: wheels.enabled: false
 # Publish gate: wheels.include_in_publish: false — не публиковать диски в live feed.
-# Pilot: publish_ids: [md_…] — только эти диски в XML (шины всегда полностью).
 wheels:
   enabled: true
   types: ["1", "2", "3"]
@@ -14,13 +13,6 @@ wheels:
   include_in_autoload: true
   include_in_publish: false
   skip_without_photos: true
-  publish_ids:
-    - md_105464
-    - md_105462
-    - md_10344
-    - md_104331
-    - md_105473
-  # publish_limit: 5
 
 stock_sources:
   enabled: true
@@ -175,11 +167,7 @@ autoload:
   shinaufa_model_photos_base: https://shinaufa.ru/images/large/tyres
   shinaufa_model_photos_wheels_base: https://shinaufa.ru/images/large/wheels
   shinaufa_model_photo_cache: data/shinaufa_model_photo_cache.json
-  shinaufa_model_photo_index: data/shinaufa_photo_index.sqlite
   shinaufa_model_photo_timeout_sec: 5
-  shinaufa_model_photo_rate_limit_sec: 0.05
-  # build_autoload: только индекс. Прогрев: warm_shinaufa_photos.py
-  shinaufa_model_photo_live_fetch: false
   photos_local_dir: /opt/avito_tires_photos
   verify_photos_on_disk: true
   # Descriptions: descriptions_db only (Excel model_descriptions removed)

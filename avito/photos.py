@@ -1,11 +1,13 @@
-"""Имена и поиск фото на Яндекс.Диске (с префиксом магазина)."""
+"""Имена и поиск фото на сервере (/opt/avito_tires_photos → https)."""
 from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 LOG = logging.getLogger(__name__)
 
@@ -14,22 +16,18 @@ from avito.photo_convert import (
     SOURCE_TO_JPEG_EXTENSIONS,
     autoload_disk_basename,
     ensure_jpeg_file,
-    normalize_yandex_photo_urls,
 )
-from urllib.parse import quote
-
-from avito.yandex_disk_api import YandexDiskDownloadUrls, disk_resource_path
 
 __all__ = [
-    "normalize_yandex_photo_urls",
     "is_avito_hosted_photo_urls",
     "photo_urls_look_like_article",
+    "photo_urls_look_like_model",
+    "photo_urls_ok_for_avito_update",
 ]
 
 
 @dataclass(frozen=True)
 class PhotoNamingSettings:
-    yandex_disk_root: str
     image_count: int
     image_ext: str
     photo_layout: str = "flat"
@@ -39,7 +37,9 @@ class PhotoNamingSettings:
 @dataclass(frozen=True)
 class StorePhotos:
     prefix: str
-    files: tuple[Path, ...]
+    files: tuple[Path, ...] = ()
+    # Готовые HTTPS URL (hotlink shinaufa и т.п.) — если заданы, files не нужны
+    urls: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,24 @@ class ResolvedListingPhotos:
 
     store_sets: tuple[StorePhotos, ...]
     source: str = ""
+
+
+
+# Параллельная папка под photos_local_dir для дисков (md/… → wheels/md/…)
+WHEELS_PHOTO_SUBDIR = "wheels"
+
+
+def product_photos_folder(
+    photos_root: Path | None, product_kind: str = "tire"
+) -> Path | None:
+    """Корень поиска/записи фото: для дисков — photos_root/wheels."""
+    if photos_root is None:
+        return None
+    from avito.wheel_parse import is_wheel_kind
+
+    if is_wheel_kind(product_kind):
+        return photos_root / WHEELS_PHOTO_SUBDIR
+    return photos_root
 
 
 def model_photo_label(brand: str, model: str) -> str:
@@ -322,6 +340,89 @@ def assign_store_for_contributor_article(
     return prefixes[idx]
 
 
+_ARTICLE_STEM_RE = re.compile(
+    r"^(?:(?P<pfx>[a-z]{2}))?(?P<art>\d{4,})(?:-(?P<idx>\d+))?$",
+    re.IGNORECASE,
+)
+
+
+def article_from_store_photo_stem(stem: str, prefixes: tuple[str, ...] | list[str]) -> str | None:
+    """pg205526 / 205526-2 / 205526 → артикул."""
+    raw = str(stem or "").strip()
+    if not raw:
+        return None
+    m = _ARTICLE_STEM_RE.match(raw)
+    if not m:
+        return None
+    pfx = (m.group("pfx") or "").lower()
+    if pfx and pfx not in {str(p).lower() for p in prefixes}:
+        # Префикс в имени, но не из наших магазинов — не считаем.
+        return None
+    return m.group("art")
+
+
+def count_own_articles_by_store(
+    photos_root: Path | None,
+    prefixes: tuple[str, ...],
+    *,
+    product_kind: str = "tire",
+) -> dict[str, int]:
+    """Сколько уникальных артикулов отснято каждым магазином (свои jpg в md/pg)."""
+    counts = {str(p): 0 for p in prefixes}
+    if not photos_root or not prefixes:
+        return counts
+    folder = product_photos_folder(Path(photos_root), product_kind)
+    if folder is None or not folder.is_dir():
+        return counts
+    for prefix in prefixes:
+        store_dir = folder / prefix
+        if not store_dir.is_dir():
+            continue
+        arts: set[str] = set()
+        for path in store_dir.glob("*.jpg"):
+            art = article_from_store_photo_stem(path.stem, prefixes)
+            if art:
+                arts.add(art)
+        # Также jpeg после конверта
+        for path in store_dir.glob("*.jpeg"):
+            art = article_from_store_photo_stem(path.stem, prefixes)
+            if art:
+                arts.add(art)
+        counts[str(prefix)] = len(arts)
+    return counts
+
+
+def assign_store_by_photo_share(
+    article: str,
+    weights: dict[str, int],
+    prefixes: tuple[str, ...],
+) -> str:
+    """Магазин пропорционально весам (числу отснятых артикулов), детерминированно.
+
+    Пример: pg=40, md=60 → ~40%/60% объявлений с shinaufa/model.
+    Если все веса 0 — равномерно как assign_store_for_contributor_article.
+    """
+    ordered = [p for p in prefixes if p]
+    if not ordered:
+        raise ValueError("Нет магазинов для назначения")
+    total = 0
+    cleaned: list[tuple[str, int]] = []
+    for p in ordered:
+        w = max(0, int(weights.get(p, 0) or 0))
+        cleaned.append((p, w))
+        total += w
+    if total <= 0:
+        return assign_store_for_contributor_article(article, tuple(ordered))
+    digest = hashlib.md5(str(article).strip().encode("utf-8")).hexdigest()
+    bucket = int(digest, 16) % total
+    acc = 0
+    for p, w in cleaned:
+        acc += w
+        if bucket < acc:
+            return p
+    return cleaned[-1][0]
+
+
 def newest_file_mtime(files: tuple[Path, ...] | list[Path]) -> float | None:
     if not files:
         return None
@@ -396,59 +497,96 @@ def resolve_listing_photo_sets(
     max_count: int = 0,
     jpeg_quality: int = 92,
     contributors_prefix: str | None = None,
+    shinaufa_model_photos=None,
+    product_kind: str = "tire",
+    photos_root: Path | None = None,
+    title: str = "",
 ) -> ResolvedListingPhotos:
     """
-    Сначала фото по артикулу (md12345-1.jpg), иначе — по бренду+модели.
+    Сначала фото по артикулу (md12345-1.jpg), иначе — модель:
+    локальный файл, затем hotlink shinaufa.ru (кэш HEAD, без вариантов slug).
 
-    Временный запасной вариант, пока нет снимков с артикулом в имени.
+    Для дисков ищем в photos_root/wheels/ (см. product_photos_folder).
     """
-    if not folder or not str(article).strip():
+    if not str(article).strip():
         return ResolvedListingPhotos(())
 
-    all_found = discover_photos_for_stores(
-        folder,
-        article,
-        prefixes,
-        layout=layout,
-        prefix_in_filename=prefix_in_filename,
-        legacy_unprefixed_prefix=legacy_unprefixed_prefix,
-        article_first=article_first,
-        max_count=max_count,
-        jpeg_quality=jpeg_quality,
-        contributors_prefix=contributors_prefix,
-    )
-    if len(all_found) <= 1:
-        store_sets = all_found
-    else:
-        winner = select_store_when_conflict(all_found)
-        store_sets = [winner] if winner else []
-    if store_sets:
-        return ResolvedListingPhotos(tuple(store_sets), "article")
+    search_root = folder
+    if photos_root is not None:
+        search_root = product_photos_folder(photos_root, product_kind)
+    elif folder is not None:
+        search_root = product_photos_folder(folder, product_kind)
+
+    store_sets: list[StorePhotos] = []
+    if search_root and search_root.is_dir():
+        all_found = discover_photos_for_stores(
+            search_root,
+            article,
+            prefixes,
+            layout=layout,
+            prefix_in_filename=prefix_in_filename,
+            legacy_unprefixed_prefix=legacy_unprefixed_prefix,
+            article_first=article_first,
+            max_count=max_count,
+            jpeg_quality=jpeg_quality,
+            contributors_prefix=contributors_prefix,
+        )
+        if len(all_found) <= 1:
+            store_sets = all_found
+        else:
+            winner = select_store_when_conflict(all_found)
+            store_sets = [winner] if winner else []
+        if store_sets:
+            return ResolvedListingPhotos(tuple(store_sets), "article")
 
     if not model_fallback:
         return ResolvedListingPhotos(())
 
-    model_files = discover_model_photos(
-        folder,
-        brand,
-        model,
-        max_count=max_count,
-        jpeg_quality=jpeg_quality,
-    )
-    if not model_files:
-        return ResolvedListingPhotos(())
-
     prefix = legacy_unprefixed_prefix or (prefixes[0] if prefixes else "md")
     label = model_photo_label(brand, model)
-    LOG.info(
-        "Артикул %s: фото модели «%s» (временно, нет снимков артикула)",
-        article,
-        label,
-    )
-    return ResolvedListingPhotos(
-        (StorePhotos(prefix=prefix, files=tuple(model_files)),),
-        "model",
-    )
+
+    if search_root and search_root.is_dir():
+        model_files = discover_model_photos(
+            search_root,
+            brand,
+            model,
+            max_count=max_count,
+            jpeg_quality=jpeg_quality,
+        )
+        if model_files:
+            LOG.info(
+                "Артикул %s: фото модели «%s» (локально, нет снимков артикула)",
+                article,
+                label,
+            )
+            return ResolvedListingPhotos(
+                (StorePhotos(prefix=prefix, files=tuple(model_files)),),
+                "model",
+            )
+
+    if shinaufa_model_photos is not None and getattr(
+        shinaufa_model_photos, "enabled", False
+    ):
+        from avito.shinaufa_photos import lookup_shinaufa_model_photo_url
+
+        url = lookup_shinaufa_model_photo_url(
+            brand,
+            model,
+            shinaufa_model_photos,
+            title=title,
+        )
+        if url:
+            LOG.info(
+                "Артикул %s: фото модели «%s» (shinaufa hotlink)",
+                article,
+                label,
+            )
+            return ResolvedListingPhotos(
+                (StorePhotos(prefix=prefix, urls=(url,)),),
+                "model",
+            )
+
+    return ResolvedListingPhotos(())
 
 
 def photo_relative_path(
@@ -460,12 +598,7 @@ def photo_relative_path(
     store_prefix: str | None = None,
     use_disk_basename: bool = False,
 ) -> str:
-    """
-    Относительный путь файла для URL/nginx или yandex_disk://.
-
-  Если задан photos_root — фактический путь от корня папки фото
-  (модель в корне → без md/; артикул в md/ → md/124889.jpg).
-    """
+    """Относительный путь файла для URL/nginx (например md/124889.jpg)."""
     if photos_root is not None:
         try:
             rel = path.resolve().relative_to(photos_root.resolve())
@@ -488,24 +621,6 @@ def photo_relative_path(
     if layout == "store_subdir" and store_prefix:
         return f"{store_prefix.strip()}/{name}"
     return name
-
-
-def disk_path_to_yandex_name(
-    path: Path,
-    article: str,
-    layout: str,
-    *,
-    store_prefix: str | None = None,
-    photos_root: Path | None = None,
-) -> str:
-    return photo_relative_path(
-        path,
-        photos_root,
-        article=article,
-        layout=layout,
-        store_prefix=store_prefix,
-        use_disk_basename=True,
-    )
 
 
 def is_avito_hosted_photo_url(url: str) -> bool:
@@ -542,47 +657,42 @@ def photo_urls_look_like_article(photos: str, article: str) -> bool:
     return any(m in low for m in markers)
 
 
-def yandex_disk_urls_from_files(
-    files: list[Path] | tuple[Path, ...],
-    *,
-    yandex_disk_root: str,
-    article: str,
-    layout: str,
-    store_prefix: str | None = None,
-    photos_root: Path | None = None,
-) -> str:
-    root = yandex_disk_root.strip("/").strip("\\")
-    parts = [
-        f"yandex_disk://{root}/{disk_path_to_yandex_name(f, article, layout, store_prefix=store_prefix, photos_root=photos_root)}"
-        for f in files
-    ]
-    return " | ".join(parts)
-
-
-def yandex_https_urls_from_files(
-    files: list[Path] | tuple[Path, ...],
-    *,
-    yandex_disk_root: str,
-    article: str,
-    layout: str,
-    store_prefix: str | None = None,
-    photos_root: Path | None = None,
-    downloader: YandexDiskDownloadUrls,
-) -> str:
-    parts: list[str] = []
-    for f in files:
-        rel = photo_relative_path(
-            f,
-            photos_root,
-            article=article,
-            layout=layout,
-            store_prefix=store_prefix,
+def photo_urls_look_like_model(photos: str) -> bool:
+    """
+    Фото модели: наш /photos/ в корне (Brand Model.jpg) или shinaufa /images/large/tyres/.
+    """
+    text = str(photos or "").strip()
+    if not text or is_avito_hosted_photo_urls(text):
+        return False
+    first = text.split("|")[0].strip()
+    low = first.lower()
+    if "/images/large/tyres/" in low or "/images/small/tyres/" in low:
+        return True
+    if "/images/large/wheels/" in low or "/images/small/wheels/" in low:
+        return True
+    if any(
+        x in low
+        for x in (
+            "/photos/md/",
+            "/photos/pg/",
+            "/photos/contributors/",
+            "/photos/sc/",
+            "/photos/wheels/",
         )
-        disk_path = disk_resource_path(yandex_disk_root, rel)
-        href = downloader.href_for_disk_file(disk_path, local_path=f)
-        if href:
-            parts.append(href)
-    return " | ".join(parts)
+    ):
+        return False
+    if "/photos/" not in low:
+        return False
+    tail = first.split("/photos/", 1)[-1]
+    # один файл в корне: «Formula Energy.jpg» / percent-encoded
+    return bool(tail) and "/" not in tail
+
+
+def photo_urls_ok_for_avito_update(photos: str, article: str) -> bool:
+    """Можно отправить в фид обновления: фото артикула или модели (не CDN Avito)."""
+    return photo_urls_look_like_article(photos, article) or photo_urls_look_like_model(
+        photos
+    )
 
 
 def server_https_urls_from_files(
@@ -614,38 +724,18 @@ def build_store_photo_urls(
     *,
     article: str,
     layout: str,
-    image_mode: str = "yandex_disk",
     photos_root: Path | None = None,
-    downloader: YandexDiskDownloadUrls | None = None,
 ) -> str:
+    """HTTPS-ссылки: hotlink urls или файлы с нашего /photos/."""
+    if store_photos.urls:
+        return " | ".join(u.strip() for u in store_photos.urls if u and str(u).strip())
     if not store_photos.files:
         return ""
-    if image_mode == "yandex_https":
-        if downloader is None:
-            raise ValueError("yandex_https требует YandexDiskDownloadUrls")
-        return yandex_https_urls_from_files(
-            store_photos.files,
-            yandex_disk_root=cfg.yandex_disk_root,
-            article=article,
-            layout=layout,
-            store_prefix=store_photos.prefix,
-            photos_root=photos_root,
-            downloader=downloader,
-        )
-    if image_mode == "server_https":
-        if not cfg.photos_public_base_url.strip():
-            raise ValueError("server_https требует photos_public_base_url в config")
-        return server_https_urls_from_files(
-            store_photos.files,
-            photos_public_base_url=cfg.photos_public_base_url,
-            article=article,
-            layout=layout,
-            store_prefix=store_photos.prefix,
-            photos_root=photos_root,
-        )
-    return yandex_disk_urls_from_files(
+    if not cfg.photos_public_base_url.strip():
+        raise ValueError("Задайте autoload.photos_public_base_url в config")
+    return server_https_urls_from_files(
         store_photos.files,
-        yandex_disk_root=cfg.yandex_disk_root,
+        photos_public_base_url=cfg.photos_public_base_url,
         article=article,
         layout=layout,
         store_prefix=store_photos.prefix,

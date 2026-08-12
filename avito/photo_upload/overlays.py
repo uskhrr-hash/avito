@@ -26,12 +26,47 @@ SHOT_LABELS: dict[int, dict[str, str]] = {
     },
 }
 
+WHEEL_SHOT_LABELS: dict[int, dict[str, str]] = {
+    1: {
+        "title": "Диск лицом",
+        "short": "лицо",
+        "hint": "Диск лицом к камере, весь обод в кадре",
+    },
+    2: {
+        "title": "Профиль / вылет",
+        "short": "профиль",
+        "hint": "Сбоку — видно глубину и вылет",
+    },
+    3: {
+        "title": "Крепёж / ступица",
+        "short": "крепы",
+        "hint": "Отверстия и центральное отверстие крупно",
+    },
+    4: {
+        "title": "Маркировка",
+        "short": "марка",
+        "hint": "Размер, ET, PCD на диске или бирке",
+    },
+}
+
 EXAMPLE_FILES: dict[int, str] = {
     1: "static/guide/examples/01-stack.jpg",
     2: "static/guide/examples/02-tread.jpg",
     3: "static/guide/examples/03-country.jpg",
     4: "static/guide/examples/04-dot.jpg",
 }
+
+# Пока снимаем только лицо диска (1 фото на артикул).
+WHEEL_EXAMPLE_FILES: dict[int, str] = {
+    1: "static/guide/examples/wheels/01-face.jpg",
+}
+
+
+def example_url_for_shot(index: int, *, product_kind: str = "tire") -> str:
+    kind = str(product_kind).lower()
+    if kind in ("wheel", "wheels", "диск", "диски"):
+        return WHEEL_EXAMPLE_FILES.get(index, "")
+    return EXAMPLE_FILES.get(index, "")
 
 # Базовая форма шины (вариант B): лежащая 72×21, стоящая 21×72.
 # Боковина — кольцо (два круга).
@@ -45,9 +80,15 @@ ZOOM_R_OUT, ZOOM_R_IN = 72, 54
 ZOOM_ARC_A1, ZOOM_ARC_A2 = 228, 312
 
 
-def shot_label(index: int) -> dict[str, str]:
-    if index in SHOT_LABELS:
-        return SHOT_LABELS[index]
+def shot_label(index: int, *, product_kind: str = "tire") -> dict[str, str]:
+    labels = WHEEL_SHOT_LABELS if str(product_kind).lower() in (
+        "wheel",
+        "wheels",
+        "диск",
+        "диски",
+    ) else SHOT_LABELS
+    if index in labels:
+        return labels[index]
     return {
         "title": f"Доп. фото {index}",
         "short": f"фото {index}",
@@ -55,9 +96,22 @@ def shot_label(index: int) -> dict[str, str]:
     }
 
 
-def overlay_svg_for_shot(index: int, *, camera: bool = False) -> str:
+def overlay_svg_for_shot(
+    index: int, *, camera: bool = False, product_kind: str = "tire"
+) -> str:
     """Контур поверх кадра (камера и страница-гайд)."""
     opacity = "0.92" if camera else "1"
+    is_wheel = str(product_kind).lower() in ("wheel", "wheels", "диск", "диски")
+    if is_wheel:
+        if index == 1:
+            return _svg_wheel_face(opacity=opacity, camera=camera)
+        if index == 2:
+            return _svg_wheel_profile(opacity=opacity, camera=camera)
+        if index == 3:
+            return _svg_wheel_hub(opacity=opacity, camera=camera)
+        if index == 4:
+            return _svg_wheel_mark(opacity=opacity, camera=camera)
+        return _svg_generic(opacity=opacity, camera=camera)
     if index == 1:
         return _svg_stack(opacity=opacity, camera=camera)
     if index == 2:
@@ -75,10 +129,26 @@ def ghost_image_for_shot(_index: int) -> str:
 
 
 def _camera_svg_header() -> str:
+    # Как object-fit:cover у <video> — один режим для шин и дисков.
     return (
         '<svg viewBox="0 0 100 160" class="guide-svg camera-overlay-svg" '
-        'preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">'
+        'preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">'
     )
+
+
+# Один режим slice; масштабы разные — шины чуть меньше, диски чуть крупнее.
+TIRE_CAMERA_SCALE = 0.68
+WHEEL_CAMERA_SCALE = 0.90
+
+
+def _camera_scaled_svg(title: str, body: str, *, scale: float) -> str:
+    return f"""{_camera_svg_header()}
+  <text x="50" y="12" text-anchor="middle" fill="#fff" font-size="5" font-family="system-ui,sans-serif" font-weight="700">{title}</text>
+  <g transform="translate(50 84) scale({scale}) translate(-50 -84)">
+{body}
+  </g>
+</svg>"""
+
 
 
 def _lying_tire(
@@ -195,11 +265,12 @@ def _sidewall_marking_overlay(
         font_size=3.6,
     )
     if camera:
-        return f"""{_camera_svg_header()}
-  <text x="50" y="12" text-anchor="middle" fill="#fff" font-size="5" font-family="system-ui,sans-serif" font-weight="700">{title}</text>
-{arcs}
-{capsule}
-</svg>"""
+        return _camera_scaled_svg(
+            title,
+            f"""{arcs}
+{capsule}""",
+            scale=TIRE_CAMERA_SCALE,
+        )
 
     scale = 2.2
     cx, cy = 160, 130
@@ -237,11 +308,12 @@ def _svg_stack(*, opacity: str, camera: bool = False) -> str:
             for y in (97, 118, 139)
         )
         vertical = _vertical_tire(39.5, 25, stroke="#2563eb")
-        return f"""{_camera_svg_header()}
-  <text x="50" y="12" text-anchor="middle" fill="#fff" font-size="5" font-family="system-ui,sans-serif" font-weight="700">3 лежат + 1 стоит</text>
-{stack}
-{vertical}
-</svg>"""
+        return _camera_scaled_svg(
+            "3 лежат + 1 стоит",
+            f"""{stack}
+{vertical}""",
+            scale=TIRE_CAMERA_SCALE,
+        )
 
     scale = 3.2
     lying_x = 14 * scale
@@ -291,10 +363,7 @@ def _svg_tread(*, opacity: str, camera: bool = False) -> str:
         x = (100 - w) / 2
         y = (160 - h) / 2
         tire = _vertical_tire(x, y, w=w, h=h, rx=rx, stroke="#2563eb", sw=1.1, lsw=0.55)
-        return f"""{_camera_svg_header()}
-  <text x="50" y="12" text-anchor="middle" fill="#fff" font-size="5" font-family="system-ui,sans-serif" font-weight="700">Протектор крупно</text>
-{tire}
-</svg>"""
+        return _camera_scaled_svg("Протектор крупно", tire, scale=TIRE_CAMERA_SCALE)
 
     w, h, rx = 33 * 3.2, 112 * 3.2, 8 * 3.2
     x = (320 - w) / 2
@@ -331,6 +400,120 @@ def _svg_dot(*, opacity: str, camera: bool = False) -> str:
     if camera:
         return svg
     return svg.replace('style="opacity:1"', f'style="opacity:{opacity}"')
+
+
+def _svg_wheel_face(*, opacity: str, camera: bool = False) -> str:
+    """Лицо диска: по реальным кадрам (480×640) диск ≈ на всю ширину."""
+    cx, cy = 50.0, 82.0
+    r_out, r_hub, r_pcd, r_bolt = 46.0, 11.0, 17.0, 2.6
+    bolts = []
+    for i in range(5):
+        ang = math.radians(-90.0 + i * 72.0)
+        bx = cx + r_pcd * math.cos(ang)
+        by = cy + r_pcd * math.sin(ang)
+        bolts.append(
+            f'  <circle cx="{bx:.1f}" cy="{by:.1f}" r="{r_bolt}" '
+            f'fill="none" stroke="#93c5fd" stroke-width="0.9"/>'
+        )
+    bolts_svg = "\n".join(bolts)
+    if camera:
+        return _camera_scaled_svg(
+            "Диск лицом",
+            f"""  <circle cx="{cx}" cy="{cy}" r="{r_out}" fill="none" stroke="#2563eb" stroke-width="1.4"/>
+  <circle cx="{cx}" cy="{cy}" r="{r_out - 2.2}" fill="none" stroke="#60a5fa" stroke-width="0.7" stroke-dasharray="2.5 2"/>
+  <circle cx="{cx}" cy="{cy}" r="{r_hub}" fill="none" stroke="#2563eb" stroke-width="1.1"/>
+{bolts_svg}""",
+            scale=WHEEL_CAMERA_SCALE,
+        )
+    # Гайд (landscape preview)
+    sx, sy = 160.0, 118.0
+    s = 2.0
+    g_bolts = []
+    for i in range(5):
+        ang = math.radians(-90.0 + i * 72.0)
+        bx = sx + r_pcd * s * math.cos(ang)
+        by = sy + r_pcd * s * math.sin(ang)
+        g_bolts.append(
+            f'  <circle cx="{bx:.1f}" cy="{by:.1f}" r="{r_bolt * s:.1f}" '
+            f'fill="none" stroke="#93c5fd" stroke-width="2"/>'
+        )
+    return f"""<svg viewBox="0 0 320 220" class="guide-svg" xmlns="http://www.w3.org/2000/svg" style="opacity:{opacity}">
+  <circle cx="{sx}" cy="{sy}" r="{r_out * s}" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <circle cx="{sx}" cy="{sy}" r="{r_hub * s}" fill="none" stroke="#2563eb" stroke-width="2.5"/>
+{chr(10).join(g_bolts)}
+  <text x="160" y="28" text-anchor="middle" font-size="14" fill="#fff" font-family="system-ui,sans-serif" font-weight="700">Диск лицом</text>
+</svg>"""
+
+
+def _svg_wheel_profile(*, opacity: str, camera: bool = False) -> str:
+    if camera:
+        return _camera_scaled_svg(
+            "Профиль / вылет",
+            """  <ellipse cx="50" cy="82" rx="16" ry="46" fill="none" stroke="#2563eb" stroke-width="1.3"/>
+  <line x1="34" y1="44" x2="66" y2="44" stroke="#93c5fd" stroke-width="0.8"/>
+  <line x1="34" y1="120" x2="66" y2="120" stroke="#93c5fd" stroke-width="0.8"/>""",
+            scale=WHEEL_CAMERA_SCALE,
+        )
+    return f"""<svg viewBox="0 0 320 220" class="guide-svg" xmlns="http://www.w3.org/2000/svg" style="opacity:{opacity}">
+  <ellipse cx="160" cy="120" rx="40" ry="96" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <text x="160" y="28" text-anchor="middle" font-size="14" fill="#fff" font-family="system-ui,sans-serif" font-weight="700">Профиль / вылет</text>
+</svg>"""
+
+
+def _svg_wheel_hub(*, opacity: str, camera: bool = False) -> str:
+    """Крепёж крупно: обод почти на всю ширину, ступица и PCD в кадре."""
+    cx, cy = 50.0, 82.0
+    r_out, r_hub, r_pcd, r_bolt = 48.0, 14.0, 22.0, 3.6
+    bolts = []
+    for i in range(5):
+        ang = math.radians(-90.0 + i * 72.0)
+        bx = cx + r_pcd * math.cos(ang)
+        by = cy + r_pcd * math.sin(ang)
+        bolts.append(
+            f'  <circle cx="{bx:.1f}" cy="{by:.1f}" r="{r_bolt}" '
+            f'fill="none" stroke="#fb923c" stroke-width="1.1"/>'
+        )
+    bolts_svg = "\n".join(bolts)
+    if camera:
+        return _camera_scaled_svg(
+            "Крепёж / ступица",
+            f"""  <circle cx="{cx}" cy="{cy}" r="{r_out}" fill="none" stroke="#2563eb" stroke-width="1.3"/>
+  <circle cx="{cx}" cy="{cy}" r="{r_hub}" fill="none" stroke="#2563eb" stroke-width="1.2"/>
+{bolts_svg}""",
+            scale=WHEEL_CAMERA_SCALE,
+        )
+    sx, sy, s = 160.0, 118.0, 1.7
+    g_bolts = []
+    for i in range(5):
+        ang = math.radians(-90.0 + i * 72.0)
+        bx = sx + r_pcd * s * math.cos(ang)
+        by = sy + r_pcd * s * math.sin(ang)
+        g_bolts.append(
+            f'  <circle cx="{bx:.1f}" cy="{by:.1f}" r="{r_bolt * s:.1f}" '
+            f'fill="none" stroke="#fb923c" stroke-width="2.5"/>'
+        )
+    return f"""<svg viewBox="0 0 320 220" class="guide-svg" xmlns="http://www.w3.org/2000/svg" style="opacity:{opacity}">
+  <circle cx="{sx}" cy="{sy}" r="{r_out * s}" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <circle cx="{sx}" cy="{sy}" r="{r_hub * s}" fill="none" stroke="#2563eb" stroke-width="2.5"/>
+{chr(10).join(g_bolts)}
+  <text x="160" y="28" text-anchor="middle" font-size="14" fill="#fff" font-family="system-ui,sans-serif" font-weight="700">Крепёж / ступица</text>
+</svg>"""
+
+
+def _svg_wheel_mark(*, opacity: str, camera: bool = False) -> str:
+    if camera:
+        return _camera_scaled_svg(
+            "Маркировка",
+            """  <rect x="18" y="52" width="64" height="56" rx="6" fill="none" stroke="#2563eb" stroke-width="1.2"/>
+  <text x="50" y="76" text-anchor="middle" fill="#93c5fd" font-size="6.5" font-family="system-ui,sans-serif">7Jx17 ET40</text>
+  <text x="50" y="90" text-anchor="middle" fill="#93c5fd" font-size="5.5" font-family="system-ui,sans-serif">5x114.3</text>""",
+            scale=WHEEL_CAMERA_SCALE,
+        )
+    return f"""<svg viewBox="0 0 320 220" class="guide-svg" xmlns="http://www.w3.org/2000/svg" style="opacity:{opacity}">
+  <rect x="50" y="55" width="220" height="120" rx="12" fill="none" stroke="#2563eb" stroke-width="3"/>
+  <text x="160" y="115" text-anchor="middle" font-size="18" fill="#93c5fd" font-family="system-ui,sans-serif">7Jx17 ET40</text>
+  <text x="160" y="28" text-anchor="middle" font-size="14" fill="#fff" font-family="system-ui,sans-serif" font-weight="700">Маркировка</text>
+</svg>"""
 
 
 def _svg_generic(*, opacity: str, camera: bool = False) -> str:

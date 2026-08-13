@@ -17,7 +17,7 @@ from avito.photo_upload import db as photo_db
 from avito.photo_upload.admin import render_admin_html
 from avito.photo_upload.guide import render_guide_html
 from avito.photo_upload.overlays import (
-    example_url_for_shot,
+    EXAMPLE_FILES,
     ghost_image_for_shot,
     overlay_svg_for_shot,
     shot_label,
@@ -48,6 +48,24 @@ SESSION_USER_ID = "photo_upload_user_id"
 ROLE_STORE = "store"
 ROLE_CONTRIBUTOR = "contributor"
 ROLE_ADMIN = "admin"
+
+# Sync DB/ERP внутри asyncio.to_thread, иначе один запрос клинит весь worker.
+_API_TIMEOUT_SEC = 12.0
+_API_SLOW_TIMEOUT_SEC = 20.0  # no-photos / admin listings / ERP shops
+
+
+async def _run_sync(fn, /, *args, timeout: float = _API_TIMEOUT_SEC, **kwargs):
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(fn, *args, **kwargs),
+            timeout=float(timeout),
+        )
+    except asyncio.TimeoutError as exc:
+        LOG.warning("sync handler timeout fn=%s timeout=%ss", getattr(fn, "__name__", fn), timeout)
+        raise HTTPException(
+            status_code=504,
+            detail="Сервер не успел ответить, попробуйте ещё раз",
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -174,12 +192,17 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
     app.state.runtime = runtime
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
+    @app.get("/healthz")
+    async def healthz() -> JSONResponse:
+        """Лёгкая проверка живости (без ERP/SQLite) для nginx/deploy smoke."""
+        return JSONResponse({"ok": True})
+
     @app.get("/api/shot-guide")
     async def api_shot_guide(index: int = 1, kind: str = "tire") -> JSONResponse:
         idx = max(1, int(index))
         product_kind = normalize_product_kind(kind)
         meta = shot_label(idx, product_kind=product_kind)
-        example = example_url_for_shot(idx, product_kind=product_kind)
+        example = EXAMPLE_FILES.get(idx, "") if product_kind == "tire" else ""
         return JSONResponse(
             {
                 "index": idx,
@@ -241,8 +264,11 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
             )
 
         if login:
-            with runtime.db() as conn:
-                user = photo_db.authenticate_user(conn, login, password)
+            def _auth():
+                with runtime.db() as conn:
+                    return photo_db.authenticate_user(conn, login, password)
+
+            user = await _run_sync(_auth)
             if user is None:
                 raise HTTPException(status_code=401, detail="Неверный логин или пароль")
             request.session.clear()
@@ -290,7 +316,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
     ) -> JSONResponse:
         _require_uploader(request, runtime)
         product_kind = normalize_product_kind(kind)
-        item = lookup_stock(runtime, article, kind=product_kind)
+        item = await _run_sync(lookup_stock, runtime, article, kind=product_kind)
         if item is None:
             return JSONResponse({"found": False, "kind": product_kind})
         return JSONResponse(
@@ -311,7 +337,9 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         _require_uploader(request, runtime)
         product_kind = normalize_product_kind(kind)
         limit_n = max(1, min(int(limit or DEFAULT_SEARCH_LIMIT), MAX_SEARCH_LIMIT))
-        rows = search_stock(runtime, q, kind=product_kind, limit=limit_n)
+        rows = await _run_sync(
+            search_stock, runtime, q, kind=product_kind, limit=limit_n
+        )
         return JSONResponse(
             [
                 {
@@ -352,13 +380,15 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
             store = next((s for s in runtime.stores if s.prefix == store_prefix), None)
             ushk_override = store.ushk_supplier if store else None
 
-        result = load_no_photos_queue_info(
+        result = await _run_sync(
+            load_no_photos_queue_info,
             runtime,
             store_prefix=store_prefix,
             limit=limit_n,
             in_store_only=in_store_only,
             ushk_supplier=ushk_override,
             kind=product_kind,
+            timeout=_API_SLOW_TIMEOUT_SEC,
         )
         return JSONResponse(
             {
@@ -390,7 +420,8 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         art = validate_article(article)
         product_kind = normalize_product_kind(kind)
         max_idx = _max_index_for(ident, runtime)
-        try:
+
+        def _next():
             idx = next_photo_index(
                 runtime,
                 store_prefix=ident.prefix,
@@ -398,16 +429,22 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
                 max_index=max_idx,
                 product_kind=product_kind,
             )
+            meta = pending_photo_meta(
+                runtime,
+                store_prefix=ident.prefix,
+                article=art,
+                index=idx,
+                max_index=max_idx,
+                product_kind=product_kind,
+            )
+            return meta
+
+        try:
+            meta = await _run_sync(_next)
+        except HTTPException:
+            raise
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        meta = pending_photo_meta(
-            runtime,
-            store_prefix=ident.prefix,
-            article=art,
-            index=idx,
-            max_index=max_idx,
-            product_kind=product_kind,
-        )
         return JSONResponse(
             {
                 "index": meta.index,
@@ -451,18 +488,25 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
             items.append((idx, data))
 
         try:
-            result = await asyncio.to_thread(
-                save_upload_batch,
-                runtime,
-                store_prefix=ident.prefix,
-                article=art,
-                items=items,
-                max_index=max_idx,
-                contributor_user_id=(
-                    ident.user_id if ident.role == ROLE_CONTRIBUTOR else None
+            result = await asyncio.wait_for(
+                asyncio.to_thread(
+                    save_upload_batch,
+                    runtime,
+                    store_prefix=ident.prefix,
+                    article=art,
+                    items=items,
+                    max_index=max_idx,
+                    contributor_user_id=(
+                        ident.user_id if ident.role == ROLE_CONTRIBUTOR else None
+                    ),
+                    product_kind=product_kind,
                 ),
-                product_kind=product_kind,
+                timeout=180.0,
             )
+        except asyncio.TimeoutError as exc:
+            raise HTTPException(
+                status_code=504, detail="Загрузка фото слишком долгая, попробуйте меньше файлов"
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -482,8 +526,12 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
     @app.get("/api/admin/users")
     async def admin_users(request: Request) -> JSONResponse:
         _require_admin(request, runtime)
-        with runtime.db() as conn:
-            users = photo_db.list_users(conn)
+
+        def _list():
+            with runtime.db() as conn:
+                return photo_db.list_users(conn)
+
+        users = await _run_sync(_list)
         return JSONResponse(
             {
                 "users": [
@@ -505,36 +553,41 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
     async def admin_shops(request: Request) -> JSONResponse:
         """Подсказки складов УШК для привязки сотрудника."""
         _require_admin(request, runtime)
-        names: list[str] = []
-        seen: set[str] = set()
 
-        def _add(name: str) -> None:
-            n = name.strip()
-            if n and n not in seen:
-                seen.add(n)
-                names.append(n)
+        def _shops() -> list[str]:
+            names: list[str] = []
+            seen: set[str] = set()
 
-        for shop in runtime.config.photo_upload.contributor_shops:
-            _add(shop)
-        for store in runtime.stores:
-            if store.ushk_supplier:
-                _add(store.ushk_supplier)
+            def _add(name: str) -> None:
+                n = name.strip()
+                if n and n not in seen:
+                    seen.add(n)
+                    names.append(n)
 
-        try:
-            import yaml as _yaml
-            from avito.store_registry import list_suppliers_by_prefix
+            for shop in runtime.config.photo_upload.contributor_shops:
+                _add(shop)
+            for store in runtime.stores:
+                if store.ushk_supplier:
+                    _add(store.ushk_supplier)
 
-            secrets = (
-                _yaml.safe_load(runtime.secrets_file.read_text(encoding="utf-8")) or {}
-            )
-            for name in list_suppliers_by_prefix(
-                secrets, name_prefix=runtime.config.stock_sources.db_ushk_prefix
-            ):
-                _add(name)
-        except Exception as exc:
-            LOG.warning("Не удалось загрузить склады УШК из ERP: %s", exc)
+            try:
+                import yaml as _yaml
+                from avito.store_registry import list_suppliers_by_prefix
 
-        names.sort(key=str.casefold)
+                secrets = (
+                    _yaml.safe_load(runtime.secrets_file.read_text(encoding="utf-8")) or {}
+                )
+                for name in list_suppliers_by_prefix(
+                    secrets, name_prefix=runtime.config.stock_sources.db_ushk_prefix
+                ):
+                    _add(name)
+            except Exception as exc:
+                LOG.warning("Не удалось загрузить склады УШК из ERP: %s", exc)
+
+            names.sort(key=str.casefold)
+            return names
+
+        names = await _run_sync(_shops, timeout=_API_SLOW_TIMEOUT_SEC)
         return JSONResponse({"shops": names})
 
     @app.post("/api/admin/users")
@@ -662,8 +715,12 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         request: Request, folder: str = "", article: str = "", limit: int = 80
     ) -> JSONResponse:
         _require_catalog(request, runtime)
-        items = list_photo_files(
-            runtime, folder=folder, article=article, limit=min(limit, 200)
+        items = await _run_sync(
+            list_photo_files,
+            runtime,
+            folder=folder,
+            article=article,
+            limit=min(limit, 200),
         )
         return JSONResponse({"items": items})
 
@@ -672,9 +729,11 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         _require_catalog(request, runtime)
         payload = await request.json()
         try:
-            deleted = delete_photo_file(
-                runtime, str(payload.get("relative_path", ""))
+            deleted = await _run_sync(
+                delete_photo_file, runtime, str(payload.get("relative_path", ""))
             )
+        except HTTPException:
+            raise
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"ok": True, "deleted": deleted})
@@ -693,7 +752,8 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         _require_catalog(request, runtime)
         from avito.photo_upload.service import list_products
 
-        items, total = list_products(
+        items, total = await _run_sync(
+            list_products,
             runtime,
             folder=folder,
             query=q,
@@ -701,6 +761,7 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
             has_photos=has_photos,
             limit=max(0, int(limit)),
             offset=max(0, int(offset or 0)),
+            timeout=_API_SLOW_TIMEOUT_SEC,
         )
         return JSONResponse(
             {"items": items, "count": len(items), "total": total}
@@ -715,10 +776,14 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
         from avito.photo_upload.service import validate_article
 
         art = validate_article(article)
-        with stock_connection(
-            runtime.stock_db_path, schema_path=runtime.stock_db_schema
-        ) as conn:
-            row = get_manual_price_row(conn, art)
+
+        def _get():
+            with stock_connection(
+                runtime.stock_db_path, schema_path=runtime.stock_db_schema
+            ) as conn:
+                return get_manual_price_row(conn, art)
+
+        row = await _run_sync(_get)
         if row is None:
             return JSONResponse({"article": art, "manual_price": None})
         return JSONResponse(
@@ -750,27 +815,31 @@ def create_app(runtime: PhotoUploadRuntime) -> FastAPI:
             by = f"store:{ident.prefix}"
         else:
             by = ident.label or "admin"
-        with stock_connection(
-            runtime.stock_db_path, schema_path=runtime.stock_db_schema
-        ) as conn:
-            if clear:
-                clear_manual_price(conn, art)
-                return JSONResponse(
-                    {"ok": True, "article": art, "manual_price": None}
-                )
-            raw_price = payload.get("price")
-            try:
-                price = float(raw_price)
-            except (TypeError, ValueError) as exc:
-                raise HTTPException(
-                    status_code=400, detail="Укажите цену"
-                ) from exc
-            try:
-                row = set_manual_price(
-                    conn, art, price, updated_by=by
-                )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        def _save():
+            with stock_connection(
+                runtime.stock_db_path, schema_path=runtime.stock_db_schema
+            ) as conn:
+                if clear:
+                    clear_manual_price(conn, art)
+                    return None
+                raw_price = payload.get("price")
+                try:
+                    price = float(raw_price)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Укажите цену") from exc
+                return set_manual_price(conn, art, price, updated_by=by)
+
+        try:
+            row = await _run_sync(_save)
+        except HTTPException:
+            raise
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if row is None:
+            return JSONResponse(
+                {"ok": True, "article": art, "manual_price": None}
+            )
         return JSONResponse(
             {
                 "ok": True,
@@ -964,7 +1033,7 @@ def _app_html(runtime: PhotoUploadRuntime, ident: SessionIdentity) -> str:
   <base href="{base}">
   <title>Фото — {ident.label}</title>
   <link rel="stylesheet" href="static/app.css?v=10">
-  <link rel="stylesheet" href="static/camera.css?v=5">
+  <link rel="stylesheet" href="static/camera.css?v=4">
   <link rel="stylesheet" href="static/admin.css?v=4">
 </head>
 <body class="page-app{catalog_css}">

@@ -5,21 +5,16 @@
 stores_file: stores.yaml
 
 # Диски рядом с шинами. Disable: wheels.enabled: false
-# Publish gate: wheels.include_in_publish: false — не публиковать диски в live feed.
-# Pilot: publish_ids: [md_…] — только эти диски в XML (шины всегда полностью).
+# include_in_publish: true — диски в live XML вместе с шинами.
+# Опционально: publish_ids: [md_…] — пилот только этих Id; publish_limit: N.
 wheels:
   enabled: true
   types: ["1", "2", "3"]
   product_type: Диски
   include_in_autoload: true
-  include_in_publish: false
+  include_in_publish: true
   skip_without_photos: true
-  publish_ids:
-    - md_105464
-    - md_105462
-    - md_10344
-    - md_104331
-    - md_105473
+  publish_ids: []
   # publish_limit: 5
 
 stock_sources:

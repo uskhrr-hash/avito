@@ -438,15 +438,20 @@ def build_listings_from_posting(
                 continue
 
         prev = existing_map.get(listing_id)
-        # Сохранить listing_id если уже был другой префикс для артикула —
-        # НО для shinaufa/model даём перераспределить по доле съёмки.
+        # Avito навсегда привязывает AvitoId к Id (md_…/pg_…). Смена префикса
+        # при shinaufa/model → error 1013 («номер уже связан с md_…»).
+        # Id всегда sticky; магазин контакта можно сменить отдельно (store ниже).
         if prev is None:
             for lid, row in existing_map.items():
                 if row.article_id == article:
                     prev = row
+                    listing_id = lid
+                    # Контакты: если source=model и store уже выбран по доле съёмки —
+                    # оставляем его. Иначе оставляем магазин из sticky Id.
                     if photo_source != "model":
-                        listing_id = lid
-                        stuck = stores.get(lid.split("_", 1)[0]) if "_" in lid else None
+                        stuck = (
+                            stores.get(lid.split("_", 1)[0]) if "_" in lid else None
+                        )
                         if stuck:
                             store = stuck
                     break

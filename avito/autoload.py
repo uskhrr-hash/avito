@@ -152,10 +152,14 @@ class _SafeDict(dict):
     def __missing__(self, key):
         return ""
 
-def _availability_headline(ushk_in_stock: bool) -> str:
+def _availability_headline(ushk_in_stock: bool, *, product_kind: str = "tire") -> str:
+    """Заголовок наличия: шины / диски — по kind, не по шаблону шин."""
+    kind = str(product_kind or "tire").strip().lower()
+    is_wheel = kind in ("wheel", "wheels", "диск", "диски", "rim", "rims")
+    noun = "Диски" if is_wheel else "Шины"
     if ushk_in_stock:
-        return "Шины в наличии!"
-    return "Шины под заказ 1-2 дня"
+        return f"{noun} в наличии!"
+    return f"{noun} под заказ 1-2 дня"
 
 def _posting_ushk_in_stock(post_row) -> bool:
     if post_row is None:
@@ -277,6 +281,8 @@ def _format_description(
     store_defaults: dict[str, str],
     ushk_in_stock: bool = False,
     sam_mb_cash_price: bool = False,
+    product_kind: str = "tire",
+    fitment_cars: str = "",
 ) -> str:
     payload = _SafeDict(
         nomenclature=nomenclature,
@@ -284,9 +290,12 @@ def _format_description(
         price=str(price),
         price_human=_format_price(price),
         quantity=quantity,
-        availability_headline=_availability_headline(ushk_in_stock),
+        availability_headline=_availability_headline(
+            ushk_in_stock, product_kind=product_kind
+        ),
         payment_terms=_payment_terms(sam_mb_cash_price),
         model_description=model_description,
+        fitment_cars=fitment_cars or "",
         store_pitch=store_pitch or "",
         contact_person=store_defaults.get("contact_person", ""),
         phone=store_defaults.get("phone", ""),

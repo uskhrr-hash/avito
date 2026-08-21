@@ -1,0 +1,20 @@
+[Unit]
+Description=Avito Photo v2 (greenfield S2 upload)
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/avito_tires_parser
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/avito_tires_parser/.venv/bin/python run_photo_v2.py --host 127.0.0.1 --port 8766
+Restart=on-failure
+RestartSec=5
+SyslogIdentifier=avito-photo-v2
+StandardOutput=journal
+StandardError=journal
+MemoryHigh=128M
+MemoryMax=256M
+
+[Install]
+WantedBy=multi-user.target

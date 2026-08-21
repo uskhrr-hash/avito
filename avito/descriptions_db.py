@@ -404,41 +404,9 @@ def approve_description(conn: Any, description_id: int) -> None:
 
 
 def import_xlsx_row(conn: Any, row: dict[str, Any], *, status: str = STATUS_APPROVED) -> bool:
-    brand = str(row.get("бренд", "") or "").strip()
-    model = str(row.get("модель", "") or "").strip()
-    key = str(row.get("ключ_модели", "") or "").strip() or model_key(brand, model)
-    html = str(row.get("описание_html", "") or "").strip()
-    if not key or not html or html.lower() == "nan":
-        return False
-
-    dict_ok = str(row.get("словарь_распознан", "") or "").strip().lower() == "да"
-    tire_id = upsert_tire_model(
-        conn,
-        model_key=key,
-        brand=brand,
-        model=model,
-        catalog_4tochki=str(row.get("каталог_4tochki", "") or "").strip(),
-        canonical_name=str(row.get("имя_каноническое", "") or "").strip(),
-        dictionary_ok=dict_ok,
-    )
-
-    md = _tbl("avito_model_descriptions")
-    p = _ph()
-    with _cursor(conn) as cur:
-        cur.execute(
-            f"""
-            SELECT 1 FROM {md} md
-            WHERE md.tire_model_id = {p} AND md.status = {p} AND md.html = {p}
-            LIMIT 1
-            """,
-            (tire_id, status, html),
-        )
-        if cur.fetchone():
-            return False
-
-    source = str(row.get("источник", "") or "").strip() or "xlsx_import"
-    insert_description(conn, tire_model_id=tire_id, html=html, status=status, source=source)
-    return True
+    """Удалено: Excel import. Используйте descriptions_db API / SQL."""
+    del conn, row, status
+    raise RuntimeError("import_xlsx_row удалён вместе с Excel battle path")
 
 
 def export_to_dataframe(conn: Any):
@@ -503,11 +471,9 @@ def export_to_dataframe(conn: Any):
 
 
 def write_descriptions_xlsx(conn: Any, path: Path) -> int:
-    """Экспорт БД → Excel (для просмотра; автозагрузка читает из БД)."""
-    df = export_to_dataframe(conn)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.to_excel(path, index=False)
-    return len(df)
+    """Удалено: Excel export. Используйте export_to_dataframe / CSV."""
+    del conn, path
+    raise RuntimeError("write_descriptions_xlsx удалён вместе с Excel battle path")
 
 
 def prompt_hash(text: str) -> str:

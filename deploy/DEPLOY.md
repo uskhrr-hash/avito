@@ -162,11 +162,11 @@ systemctl reload nginx
 ### Шаг 2.8 — Проверка
 
 ```bash
-systemctl status avito-photo-upload
+systemctl status avito-photo-v2
 curl -s https://avito.shinaufa.ru/health
 ```
 
-В браузере на телефоне: **https://avito.shinaufa.ru/photo/**
+В браузере на телефоне: **https://avito.shinaufa.ru/**
 
 ---
 
@@ -207,7 +207,7 @@ cd /opt/avito_tires_parser
 bash deploy/update-on-server.sh
 ```
 
-Скрипт сам сделает: `git pull`, `pip install`, перезапуск `avito-photo-upload`.
+Скрипт сам сделает: `git pull`, `pip install`, перезапуск `avito-photo-v2`.
 
 ---
 
@@ -263,7 +263,7 @@ systemctl disable --now avito-daily.timer
 
 ### Вариант А — через веб-страницу (рекомендуется)
 
-Менеджер открывает https://avito.shinaufa.ru/photo/ → логин → артикул → снимок → «Отправить на сервер».
+Менеджер открывает https://avito.shinaufa.ru/ → логин → артикул → снимок → «Отправить на сервер».
 
 ### Вариант Б — первичная копия старых фото с ПК
 
@@ -291,11 +291,11 @@ git checkout -- .
 git pull
 ```
 
-### Страница /photo/ не открывается
+### Страница фото не открывается
 
 ```bash
-systemctl status avito-photo-upload
-journalctl -u avito-photo-upload -n 30
+systemctl status avito-photo-v2
+journalctl -u avito-photo-v2 -n 30
 ```
 
 ### В build_autoload «папка фото не найдена»
@@ -319,4 +319,4 @@ cat /opt/avito_tires_parser/config.local.yaml
 | Обновить сервер | VPS | `bash deploy/update-on-server.sh` |
 | Собрать фид / publish | VPS авто | `avito-daily.timer` → `deploy/run-daily.sh` |
 | Ручной прогон сейчас | VPS | `systemctl start avito-daily.service` |
-| Фото с телефона | Браузер | https://avito.shinaufa.ru/photo/ |
+| Фото с телефона | Браузер | https://avito.shinaufa.ru/ |

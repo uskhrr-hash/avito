@@ -1,4 +1,7 @@
-"""Каскад базовой цены по реестру ERP (П2–П6). П1 — Google в merge_rows."""
+"""Каскад базовой цены по реестру ERP (П2–П6). П1 — Google в merge_rows.
+
+Уфа/Москва САМ МБ входят как price×0.9 и сравниваются с другими: берётся min.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -320,13 +323,22 @@ def _priority_result(
     )
 
 
+def _cheapest_line(rows: list[RegisterLine]) -> RegisterLine:
+    return min(rows, key=lambda line: (line.price, -line.quantity))
+
+
+def _is_sam_mb_cash_supplier(supplier: str, cfg: StockPriorityConfig) -> bool:
+    name = str(supplier or "").strip()
+    return name in (cfg.supplier_ufa, cfg.supplier_moscow)
+
+
 def resolve_register_article(
     article: str,
     name: str,
     lines: list[RegisterLine],
     cfg: StockPriorityConfig,
 ) -> PriorityResult | None:
-    """Возвращает базовую цену по каскаду П2–П6 для одного артикула."""
+    """Базовая цена: min среди кандидатов (Уфа/Москва ×0.9 и остальные как есть)."""
     active = [
         line
         for line in lines
@@ -343,7 +355,6 @@ def resolve_register_article(
         and line.quantity >= cfg.min_quantity
     ]
     ushk_in_stock = bool(ushk_ok)
-    sam_mb_cash_price = article_has_sam_mb_cash_stock(article, lines, cfg)
     ufa_ok = [
         line
         for line in active
@@ -355,83 +366,74 @@ def resolve_register_article(
         if line.supplier == cfg.supplier_moscow
         and line.quantity > cfg.moscow_min_quantity
     ]
-    eligible = [line for line in active if line.quantity >= cfg.min_quantity]
+    others = [
+        line
+        for line in active
+        if line.quantity >= cfg.min_quantity
+        and line.supplier != cfg.supplier_moscow
+        and line.supplier != cfg.supplier_ufa
+    ]
 
-    has_ushk = bool(ushk_ok)
-    has_ufa = bool(ufa_ok)
-    has_moscow = bool(moscow_ok)
+    candidates: list[PriorityResult] = []
 
-    if has_ushk and has_ufa:
-        row = ufa_ok[0]
-        return _priority_result(
-            article=article,
-            name=name,
-            base_price=round(row.price * cfg.ufa_multiplier, 2),
-            quantity=_qty_str(row.quantity),
-            priority="p2",
-            supplier=row.supplier,
-            ushk_in_stock=ushk_in_stock,
-            sam_mb_cash_price=sam_mb_cash_price,
-            meta=meta,
+    if ufa_ok:
+        row = _cheapest_line(ufa_ok)
+        candidates.append(
+            _priority_result(
+                article=article,
+                name=name,
+                base_price=round(row.price * cfg.ufa_multiplier, 2),
+                quantity=_qty_str(row.quantity),
+                priority="p2" if ushk_in_stock else "p3",
+                supplier=row.supplier,
+                ushk_in_stock=ushk_in_stock,
+                sam_mb_cash_price=True,
+                meta=meta,
+            )
         )
 
-    if has_ufa:
-        row = ufa_ok[0]
-        return _priority_result(
-            article=article,
-            name=name,
-            base_price=round(row.price * cfg.ufa_multiplier, 2),
-            quantity=_qty_str(row.quantity),
-            priority="p3",
-            supplier=row.supplier,
-            ushk_in_stock=ushk_in_stock,
-            sam_mb_cash_price=sam_mb_cash_price,
-            meta=meta,
+    if moscow_ok and ushk_in_stock:
+        row = _cheapest_line(moscow_ok)
+        candidates.append(
+            _priority_result(
+                article=article,
+                name=name,
+                base_price=round(row.price * cfg.moscow_multiplier, 2),
+                quantity=_qty_str(row.quantity),
+                priority="p4",
+                supplier=row.supplier,
+                ushk_in_stock=ushk_in_stock,
+                sam_mb_cash_price=True,
+                meta=meta,
+            )
         )
 
-    if has_moscow and has_ushk:
-        row = moscow_ok[0]
-        return _priority_result(
-            article=article,
-            name=name,
-            base_price=round(row.price * cfg.moscow_multiplier, 2),
-            quantity=_qty_str(row.quantity),
-            priority="p4",
-            supplier=row.supplier,
-            ushk_in_stock=ushk_in_stock,
-            sam_mb_cash_price=sam_mb_cash_price,
-            meta=meta,
+    if others:
+        row = _cheapest_line(others)
+        priority = (
+            "p5"
+            if is_ushk_supplier(row.supplier, prefix=cfg.ushk_prefix)
+            else "p6"
+        )
+        candidates.append(
+            _priority_result(
+                article=article,
+                name=name,
+                base_price=round(row.price, 2),
+                quantity=_qty_str(row.quantity),
+                priority=priority,
+                supplier=row.supplier,
+                ushk_in_stock=ushk_in_stock,
+                sam_mb_cash_price=_is_sam_mb_cash_supplier(row.supplier, cfg),
+                meta=meta,
+            )
         )
 
-    if has_ushk:
-        row = ushk_ok[0]
-        return _priority_result(
-            article=article,
-            name=name,
-            base_price=round(row.price, 2),
-            quantity=_qty_str(row.quantity),
-            priority="p5",
-            supplier=row.supplier,
-            ushk_in_stock=ushk_in_stock,
-            sam_mb_cash_price=sam_mb_cash_price,
-            meta=meta,
-        )
-
-    if not eligible:
+    if not candidates:
         return None
 
-    row = min(eligible, key=lambda line: line.price)
-    return _priority_result(
-        article=article,
-        name=name,
-        base_price=round(row.price, 2),
-        quantity=_qty_str(row.quantity),
-        priority="p6",
-        supplier=row.supplier,
-        ushk_in_stock=ushk_in_stock,
-        sam_mb_cash_price=sam_mb_cash_price,
-        meta=meta,
-    )
+    rank = {"p2": 0, "p3": 1, "p4": 2, "p5": 3, "p6": 4}
+    return min(candidates, key=lambda c: (c.base_price, rank.get(c.priority, 9)))
 
 
 def resolve_register_stock(

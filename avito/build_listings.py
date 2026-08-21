@@ -41,6 +41,7 @@ from avito.stock_db import (
     ListingDbRow,
     delete_listings_not_in,
     load_listings_map,
+    load_manual_prices_map,
     replace_no_photos,
     sync_avito_ids_from_listings,
     upsert_listings,
@@ -53,6 +54,7 @@ from avito.wheel_parse import (
     is_wheel_kind,
     map_wheel_fields,
 )
+from avito.wheel_fitment_cache import load_fitment_cache
 
 LOG = logging.getLogger(__name__)
 
@@ -243,6 +245,9 @@ def build_listings_from_posting(
     local_photos = resolve_photos_folder(cfg, root)
     tire_cat = load_tire_catalog(str(root / "data" / "avito_tire_catalog.json"))
     existing_map = load_listings_map(conn)
+    manuals = load_manual_prices_map(conn)
+    if manuals:
+        LOG.info("Ручные цены (перекрывают расчёт): %s", len(manuals))
 
     # kind в posting мог быть потерян до миграции колонки — подстрахуемся goods.xlsx
     goods_kind: dict[str, str] = {}
@@ -262,6 +267,46 @@ def build_listings_from_posting(
     except Exception as exc:  # noqa: BLE001
         LOG.warning("goods kind map unavailable: %s", exc)
 
+    # posting_items хранит только kind; wheel_type/brand/… — в stock_items.
+    # Без wheel_type Avito отклоняет диски: «Тип диска» (RimType).
+    stock_wheel_by_art: dict[str, dict[str, str]] = {}
+    try:
+        cols = {
+            str(r[1])
+            for r in conn.execute("PRAGMA table_info(stock_items)").fetchall()
+        }
+        want = [
+            c
+            for c in (
+                "wheel_type",
+                "brand",
+                "model",
+                "width",
+                "diameter",
+                "studs",
+                "circle",
+                "et",
+                "hub",
+            )
+            if c in cols
+        ]
+        if want and "article" in cols:
+            sel = ", ".join(["article"] + want)
+            for r in conn.execute(f"SELECT {sel} FROM stock_items"):
+                art = str(r["article"] or "").strip()
+                if not art:
+                    continue
+                stock_wheel_by_art[art] = {
+                    c: str(r[c] or "").strip() for c in want
+                }
+            LOG.info(
+                "stock wheel attrs: %s артикулов с полями %s",
+                len(stock_wheel_by_art),
+                ",".join(want),
+            )
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("stock wheel attrs unavailable: %s", exc)
+
     photos_missing: list[dict] = []
     missing_models: dict[str, dict] = {}
     built: list[ListingDbRow] = []
@@ -280,6 +325,18 @@ def build_listings_from_posting(
             getattr(wheels_cfg, "product_type", "Диски") or "Диски"
         ).strip() or "Диски"
         wheels_desc_html = str(getattr(wheels_cfg, "description_html", "") or "")
+
+    fitment_cache = None
+    fitment_path = getattr(cfg, "wheel_fitment_cache", None)
+    if fitment_path is None:
+        fitment_path = root / "data" / "wheel_fitment_cache.db"
+    elif not Path(str(fitment_path)).is_absolute():
+        fitment_path = root / fitment_path
+    else:
+        fitment_path = Path(str(fitment_path))
+    fitment_cache = load_fitment_cache(fitment_path)
+    if fitment_cache is not None:
+        LOG.info("wheel fitment cache: %s", fitment_path)
 
     stats = {
         "updated": 0,
@@ -323,6 +380,9 @@ def build_listings_from_posting(
 
         article = normalize_article_id(post.get("артикул", ""))
         price = post.get("recommended_price")
+        manual = manuals.get(article) if article else None
+        if manual is not None and manual > 0:
+            price = manual
         if not article or pd.isna(price):
             stats["skipped"] += 1
             continue
@@ -337,16 +397,19 @@ def build_listings_from_posting(
             continue
 
         if is_wheel:
+            sw = stock_wheel_by_art.get(article) or {}
             wfields = map_wheel_fields(
-                brand=str(post.get("brand", "") or ""),
-                model=str(post.get("model", "") or ""),
-                wheel_type=str(post.get("wheel_type", "") or ""),
-                width=str(post.get("width", "") or ""),
-                diameter=str(post.get("diameter", "") or ""),
-                studs=str(post.get("studs", "") or ""),
-                circle=str(post.get("circle", "") or ""),
-                et=str(post.get("et", "") or ""),
-                hub=str(post.get("hub", "") or ""),
+                brand=str(post.get("brand", "") or "") or sw.get("brand", ""),
+                model=str(post.get("model", "") or "") or sw.get("model", ""),
+                wheel_type=str(post.get("wheel_type", "") or "")
+                or sw.get("wheel_type", ""),
+                width=str(post.get("width", "") or "") or sw.get("width", ""),
+                diameter=str(post.get("diameter", "") or "")
+                or sw.get("diameter", ""),
+                studs=str(post.get("studs", "") or "") or sw.get("studs", ""),
+                circle=str(post.get("circle", "") or "") or sw.get("circle", ""),
+                et=str(post.get("et", "") or "") or sw.get("et", ""),
+                hub=str(post.get("hub", "") or "") or sw.get("hub", ""),
                 title=nom,
             )
             fields = {
@@ -534,15 +597,29 @@ def build_listings_from_posting(
                 '<p>Новые диски &quot;{nomenclature}&quot;</p>'
                 "<p><br></p>"
                 "<p><strong>{payment_terms}</strong></p>"
+                "{fitment_cars}"
                 "<p>{model_description}</p>"
                 "<p>Артикул: {article}. Цена за 1 шт: {price_human} руб.</p>"
                 "<ul>"
                 "<li>Количество на складе: {quantity}</li>"
-                "<li>Самовывоз: {address}</li>"
+                "<li>Самовывоз: Уфа и Стерлитамак.</li>"
+                "<li>Адрес: {address}</li>"
                 "<li>Контакт: {contact_person}, {phone}</li>"
                 "<li>Связь: {contact_method}</li>"
                 "</ul>"
             )
+        fitment_html = ""
+        if is_wheel and fitment_cache is not None:
+            fitment_html = fitment_cache.html_for_article(article)
+            if not fitment_html:
+                sw = stock_wheel_by_art.get(article) or {}
+                fitment_html = fitment_cache.html_for_size_attrs(
+                    diameter=sw.get("diameter"),
+                    studs=sw.get("studs"),
+                    circle=sw.get("circle"),
+                    et=sw.get("et"),
+                    hub=sw.get("hub"),
+                )
         description = _format_description(
             desc_template,
             nomenclature=nom,
@@ -554,6 +631,8 @@ def build_listings_from_posting(
             store_defaults=row_defaults,
             ushk_in_stock=_posting_ushk_in_stock(post),
             sam_mb_cash_price=_posting_sam_mb_cash_price(post),
+            product_kind=kind,
+            fitment_cars=fitment_html,
         )
         multi_name = build_multi_name_from_title(nom)
         avito_id = _avito_id_for_row(listing_id, article, avito_ids)

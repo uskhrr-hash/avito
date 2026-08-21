@@ -18,7 +18,7 @@ LOG = logging.getLogger("process_manager_inbox")
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Импорт фото из папки «входящие» на Яндекс.Диске"
+        description="Импорт фото из папки «входящие» на сервере"
     )
     p.add_argument("-c", "--config", type=Path, default=ROOT / "config.yaml")
     p.add_argument(

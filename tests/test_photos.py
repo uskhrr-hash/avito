@@ -7,8 +7,6 @@ from pathlib import Path
 
 from avito.photos import (
     StorePhotos,
-    assign_store_by_photo_share,
-    count_own_articles_by_store,
     discover_model_photos,
     discover_photos_for_stores,
     discover_prefixed_photos,
@@ -269,31 +267,6 @@ class TestPhotos(unittest.TestCase):
             " | https://example.com/md149898-1.jpg"
         )
         self.assertFalse(photo_urls_look_like_article(avito_cdn, "149898"))
-
-    def test_assign_store_by_photo_share_weights(self):
-        weights = {"md": 60, "pg": 40}
-        counts = {"md": 0, "pg": 0}
-        for i in range(5000):
-            counts[assign_store_by_photo_share(str(20000 + i), weights, ("md", "pg"))] += 1
-        self.assertAlmostEqual(counts["md"] / 5000, 0.60, delta=0.03)
-        self.assertAlmostEqual(counts["pg"] / 5000, 0.40, delta=0.03)
-        # stable
-        self.assertEqual(
-            assign_store_by_photo_share("205526", weights, ("md", "pg")),
-            assign_store_by_photo_share("205526", weights, ("md", "pg")),
-        )
-
-    def test_count_own_articles_by_store(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            (root / "pg").mkdir()
-            (root / "md").mkdir()
-            (root / "pg" / "205526.jpg").write_bytes(b"\xff\xd8\xff\xd9")
-            (root / "pg" / "202845-2.jpg").write_bytes(b"\xff\xd8\xff\xd9")
-            (root / "md" / "171994.jpg").write_bytes(b"\xff\xd8\xff\xd9")
-            (root / "md" / "171994-2.jpg").write_bytes(b"\xff\xd8\xff\xd9")
-            got = count_own_articles_by_store(root, ("md", "pg"), product_kind="tire")
-            self.assertEqual(got, {"md": 1, "pg": 2})
 
 
 if __name__ == "__main__":

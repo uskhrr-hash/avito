@@ -93,8 +93,6 @@ avito_sync:
   refresh_ids_after_publish: true
   # Нет в posting (остатки кончились) → quantity=0 на Avito
   close_oos: true
-
-# Веб-страница для съёмки фото с телефона (run_photo_upload.py)
   diff_only: true
   force_full_sync: false
   seed_on_empty: true
@@ -105,22 +103,21 @@ avito_sync:
   full_ids_daily_hour: 3
   photo_updates_diff_only: false  # CRITICAL: true wiped catalog (Avito full-replace)
   force_full_photo_updates: true  # next builds emit full existing-ads XML
+
+# Shared photo runtime for Photo v2 (disk/stock helpers; secrets → photo_upload.stores).
+# UI process: run_photo_v2.py → :8766 (avito-photo-v2). Legacy v1 removed (S6).
 photo_upload:
   enabled: true
   host: 127.0.0.1
-  port: 8765
+  port: 8766
   session_max_age_hours: 72
   max_upload_mb: 12
-  public_mount_path: /photo
+  public_mount_path: /
   db_path: data/photo_upload.db
   contributors_prefix: contributors
   points_per_photo: 10
   contributor_max_photos: 10
-  # Подсказки для выбора склада сотрудника (точные имена из ERP logistics.suppliers).
-  # Список также подтягивается из ERP (префикс УШК) при открытии админки.
   contributor_shops: []
-    # - УШК Сипайлово
-    # - УШК Проспект Октября
 
 compare:
   stock_only: true

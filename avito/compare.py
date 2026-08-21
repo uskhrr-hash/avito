@@ -7,17 +7,10 @@ from pathlib import Path
 import pandas as pd
 
 from avito.config import CompareSettings
-from avito.stock_sources import (
-    GOODS_COLUMN_COUNT,
-    GOODS_SAM_MB_CASH_COLUMN_INDEX,
-    GOODS_SOURCE_COLUMN_INDEX,
-    GOODS_USHK_COLUMN_INDEX,
-    is_legacy_goods_format,
-    _parse_ushk_cell,
-)
 from avito.own import is_own_listing
 from avito.pricing import (
     PriceRecommendation,
+    fixed_price_recommendation,
     recommend_price,
     round_price_to_tens,
 )
@@ -35,6 +28,16 @@ class StockRow:
     ushk_in_stock: bool = False
     sam_mb_cash_price: bool = False
     source: str = ""
+    kind: str = "tire"
+    brand: str = ""
+    model: str = ""
+    wheel_type: str = ""
+    width: str = ""
+    diameter: str = ""
+    studs: str = ""
+    circle: str = ""
+    et: str = ""
+    hub: str = ""
 
 
 def _parse_incoming(value) -> float | None:
@@ -50,162 +53,64 @@ def _parse_incoming(value) -> float | None:
         return None
 
 
-def _parse_optional_avito_price(value) -> float | None:
-    if value is None or (isinstance(value, float) and pd.isna(value)):
-        return None
-    s = str(value).strip().lower()
-    if not s or s in ("nan", "google", "db"):
-        return None
-    return _parse_incoming(value)
-
-
-def _read_stock_dataframe(path: Path, cfg: CompareSettings) -> pd.DataFrame:
-    suffix = path.suffix.lower()
-    if cfg.stock_has_header:
-        if suffix == ".csv":
-            return pd.read_csv(path, header=0, encoding="utf-8-sig")
-        return pd.read_excel(path, sheet_name=0, header=0)
-    if suffix == ".csv":
-        return pd.read_csv(path, header=None, encoding="utf-8-sig")
-    return pd.read_excel(path, sheet_name=0, header=None)
-
-
-def load_stock(path: Path, cfg: CompareSettings) -> list[StockRow]:
-    if not path.exists():
-        raise FileNotFoundError(
-            f"Файл остатков не найден: {path}. Запустите: python build_stock.py"
-        )
-
-    df = _read_stock_dataframe(path, cfg)
-    if not cfg.stock_has_header and is_legacy_goods_format(df):
-        raise ValueError(
-            f"Устаревший {path.name} ({len(df.columns)} колонок, нужно {GOODS_COLUMN_COUNT}). "
-            "Остатки только из Google и БД: python build_stock.py"
-        )
-    rows: list[StockRow] = []
-
-    if cfg.stock_has_header:
-        art_col = _resolve_column(
-            df.columns, cfg.article_column, ("артикул", "арт", "sku"), required=False
-        )
-        nom_col = _resolve_column(
-            df.columns, cfg.nomenclature_column, ("номенклатура", "товар", "наименование")
-        )
-        price_col = _resolve_column(
-            df.columns,
-            cfg.incoming_price_column,
-            ("цена", "входящая", "закуп", "входящая цена", "цена закуп"),
-        )
-        qty_col = _resolve_column(
-            df.columns,
-            cfg.quantity_column,
-            ("количество", "кол-во", "остаток", "qty"),
-            required=False,
-        )
-        source_col = _resolve_column(
-            df.columns, "source", ("source", "источник", "приоритет"), required=False
-        )
-        for _, r in df.iterrows():
-            nom = str(r.get(nom_col, "") or "").strip()
-            if not nom or nom.lower() in ("nan", "номенклатура"):
-                continue
-            incoming = _parse_incoming(r.get(price_col))
-            if incoming is None:
-                continue
-            article = str(r.get(art_col, "") or "").strip() if art_col else ""
-            qty = str(r.get(qty_col, "") or "").strip() if qty_col else ""
-            source = str(r.get(source_col, "") or "").strip() if source_col else ""
-            rows.append(
-                StockRow(
-                    article=_clean_article(article),
-                    nomenclature=nom,
-                    incoming=incoming,
-                    quantity=qty,
-                    source=source,
-                )
-            )
-        return rows
-
-    idx = cfg.stock_indexes
-    i_art = idx.get("article", 0)
-    i_nom = idx.get("nomenclature", 1)
-    i_qty = idx.get("quantity", 2)
-    i_price = idx.get("price", 3)
-    i_avito = idx.get("avito_price")
-
-    for _, r in df.iterrows():
-        nom = str(r.iloc[i_nom] if i_nom < len(r) else "").strip()
-        if not nom or nom.lower() in ("nan", "номенклатура"):
-            continue
-        incoming = _parse_incoming(r.iloc[i_price] if i_price < len(r) else None)
-        if incoming is None:
-            continue
-        article = str(r.iloc[i_art] if i_art < len(r) else "").strip()
-        qty = str(r.iloc[i_qty] if i_qty < len(r) else "").strip()
-        if qty.lower() == "nan":
-            qty = ""
-        avito_price = None
-        if i_avito is not None:
-            avito_price = _parse_optional_avito_price(
-                r.iloc[i_avito] if i_avito < len(r) else None
-            )
-        ushk_in_stock = False
-        if len(r) > GOODS_USHK_COLUMN_INDEX:
-            ushk_in_stock = _parse_ushk_cell(r.iloc[GOODS_USHK_COLUMN_INDEX])
-        sam_mb_cash_price = False
-        if len(r) > GOODS_SAM_MB_CASH_COLUMN_INDEX:
-            sam_mb_cash_price = _parse_ushk_cell(r.iloc[GOODS_SAM_MB_CASH_COLUMN_INDEX])
-        source = ""
-        if len(r) > GOODS_SOURCE_COLUMN_INDEX:
-            source = str(r.iloc[GOODS_SOURCE_COLUMN_INDEX] or "").strip()
-        rows.append(
-            StockRow(
-                article=_clean_article(article),
-                nomenclature=nom,
-                incoming=incoming,
-                quantity=qty,
-                avito_price=avito_price,
-                ushk_in_stock=ushk_in_stock,
-                sam_mb_cash_price=sam_mb_cash_price,
-                source=source,
-            )
-        )
-    return rows
-
-
-def _clean_article(value: str) -> str:
-    s = value.strip()
-    if s.lower() in ("nan", ""):
-        return ""
-    if s.endswith(".0"):
-        try:
-            return str(int(float(s)))
-        except ValueError:
-            pass
-    return s
-
-
-def _resolve_column(
-    columns,
-    preferred: str,
-    hints: tuple[str, ...],
+def load_stock_from_db(
+    db_path: Path,
     *,
-    required: bool = True,
-) -> str | None:
-    cols = list(columns)
-    if preferred in cols:
-        return preferred
-    lower_map = {str(c).strip().lower(): c for c in cols}
-    if preferred.strip().lower() in lower_map:
-        return lower_map[preferred.strip().lower()]
-    for h in hints:
-        if h in lower_map:
-            return lower_map[h]
-    if required:
-        raise KeyError(
-            f"Колонка «{preferred}» не найдена. Доступны: {', '.join(str(c) for c in cols)}"
+    schema_path: Path | None = None,
+) -> list[StockRow]:
+    """Остатки из локального SQLite (результат build_stock)."""
+    from avito.stock_db import iter_items, row_count, stock_connection
+
+    if not db_path.exists():
+        raise FileNotFoundError(
+            f"БД остатков не найдена: {db_path}. Запустите: python build_stock.py"
         )
-    return None
+    with stock_connection(db_path, schema_path=schema_path) as conn:
+        if row_count(conn) <= 0:
+            raise FileNotFoundError(
+                f"БД остатков пуста: {db_path}. Запустите: python build_stock.py"
+            )
+        db_rows = iter_items(conn)
+    return [
+        StockRow(
+            article=r.article,
+            nomenclature=r.name,
+            incoming=float(r.price),
+            quantity=r.quantity,
+            avito_price=r.avito_price,
+            ushk_in_stock=r.ushk_in_stock,
+            sam_mb_cash_price=r.sam_mb_cash_price,
+            source=r.source,
+            kind=r.kind or "tire",
+            brand=r.brand or "",
+            model=r.model or "",
+            wheel_type=r.wheel_type or "",
+            width=r.width or "",
+            diameter=r.diameter or "",
+            studs=r.studs or "",
+            circle=r.circle or "",
+            et=r.et or "",
+            hub=r.hub or "",
+        )
+        for r in db_rows
+        if r.article and r.name and r.price > 0
+    ]
+
+
+def load_stock(
+    path: Path,
+    cfg: CompareSettings,
+    *,
+    stock_db_path: Path | None = None,
+    stock_db_schema: Path | None = None,
+) -> list[StockRow]:
+    """Читает остатки только из SQLite (build_stock). Excel/path fallback удалён."""
+    del path, cfg  # legacy signature: stock_file path больше не читается
+    if stock_db_path is None:
+        raise FileNotFoundError(
+            "Нужен stock_db (data/avito_stock.db). Запустите: python build_stock.py"
+        )
+    return load_stock_from_db(stock_db_path, schema_path=stock_db_schema)
 
 
 def load_avito_dump(path: Path, own_names: list[str]) -> pd.DataFrame:
@@ -355,10 +260,12 @@ def build_posting_rows(
     avito_mins: dict[str, float],
     cfg: CompareSettings,
     date_key: str,
+    manual_prices: dict[str, float] | None = None,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     posting: list[dict] = []
     problems: list[dict] = []
     seen_nom: dict[str, int] = {}
+    manuals = manual_prices or {}
 
     for row in stock:
         key = row.nomenclature  # 1:1, только strip при загрузке
@@ -366,15 +273,16 @@ def build_posting_rows(
 
         # остатки в нашем формате; avito_min по name_canonical после normalize_avito.py
         avito_min = avito_mins.get(key)
-        rec = recommend_price(
-            row.incoming,
-            avito_min,
-            seed=key,
-            date_key=date_key,
-            no_avito_multiplier=cfg.no_avito_multiplier,
-            floor_multiplier=cfg.floor_multiplier,
-            discounts=cfg.avito_discounts,
-        )
+        art = str(row.article or "").strip()
+        manual = manuals.get(art)
+        if manual is not None and manual > 0:
+            rec = fixed_price_recommendation(manual, row.incoming)
+        else:
+            rec = recommend_price(
+                row.incoming,
+                no_avito_multiplier=cfg.no_avito_multiplier,
+                floor_multiplier=cfg.floor_multiplier,
+            )
 
         posting.append(_posting_record(row, rec, avito_min, duplicate=(seen_nom[key] > 1)))
 
@@ -427,6 +335,16 @@ def _posting_record(
         "discount_pct": rec.discount_pct if rec.discount_pct is not None else "",
         "floor_входящая_x1.1": round_price_to_tens(rec.floor_price),
         "дубликат_остаток": duplicate,
+        "kind": row.kind or "tire",
+        "brand": row.brand,
+        "model": row.model,
+        "wheel_type": row.wheel_type,
+        "width": row.width,
+        "diameter": row.diameter,
+        "studs": row.studs,
+        "circle": row.circle,
+        "et": row.et,
+        "hub": row.hub,
     }
 
 

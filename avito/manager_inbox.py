@@ -59,8 +59,9 @@ def photo_relative_path(
     store_prefix: str,
     photo_layout: str = "flat",
     prefix_in_filename: bool = True,
+    product_kind: str = "tire",
 ) -> str:
-    """Относительный путь внутри photos_local_dir (например md/124889.jpg)."""
+    """Относительный путь внутри photos_local_dir (например md/124889.jpg или wheels/md/…)."""
     name = photo_filename(
         article,
         index,
@@ -70,11 +71,18 @@ def photo_relative_path(
     )
     layout = (photo_layout or "flat").lower()
     if layout == "store_subdir" and store_prefix:
-        return f"{store_prefix.strip()}/{name}"
-    if layout == "folder":
+        rel = f"{store_prefix.strip()}/{name}"
+    elif layout == "folder":
         art = str(article).strip()
-        return f"{art}/{name}"
-    return name
+        rel = f"{art}/{name}"
+    else:
+        rel = name
+    from avito.wheel_parse import is_wheel_kind
+    from avito.photos import WHEELS_PHOTO_SUBDIR
+
+    if is_wheel_kind(product_kind):
+        return f"{WHEELS_PHOTO_SUBDIR}/{rel}"
+    return rel
 
 
 def photo_target_path(
@@ -85,6 +93,7 @@ def photo_target_path(
     store_prefix: str,
     photo_layout: str = "flat",
     prefix_in_filename: bool = True,
+    product_kind: str = "tire",
 ) -> Path:
     rel = photo_relative_path(
         article,
@@ -92,6 +101,7 @@ def photo_target_path(
         store_prefix=store_prefix,
         photo_layout=photo_layout,
         prefix_in_filename=prefix_in_filename,
+        product_kind=product_kind,
     )
     return photos_root / Path(rel)
 

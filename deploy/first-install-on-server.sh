@@ -44,11 +44,11 @@ fi
 source .venv/bin/activate
 pip install -r requirements.txt
 
-echo "=== systemd: веб-загрузка фото ==="
-cp deploy/avito-photo-upload.service /etc/systemd/system/
+echo "=== systemd: Photo v2 ==="
+cp deploy/avito-photo-v2.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable avito-photo-upload
-systemctl restart avito-photo-upload
+systemctl enable avito-photo-v2
+systemctl restart avito-photo-v2
 
 echo "=== systemd: ежедневный пайплайн (таймер) ==="
 chmod +x deploy/run-daily.sh
@@ -66,8 +66,8 @@ echo "=== База описаний (один раз с ПК) ==="
 echo "scp data/avito_descriptions.db root@SERVER:$APP_DIR/data/"
 
 echo "=== Готово. Проверка: ==="
-echo "  systemctl status avito-photo-upload"
+echo "  systemctl status avito-photo-v2"
 echo "  systemctl list-timers avito-daily.timer"
 echo "  curl -s https://avito.shinaufa.ru/health"
-echo "  https://avito.shinaufa.ru/photo/"
+echo "  https://avito.shinaufa.ru/"
 echo "Рекомендуется: timedatectl set-timezone Asia/Yekaterinburg"

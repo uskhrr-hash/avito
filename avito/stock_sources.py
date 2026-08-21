@@ -345,7 +345,7 @@ def merge_rows(
     ushk_articles: frozenset[str] | None = None,
     sam_mb_cash_articles: frozenset[str] | None = None,
 ) -> list[StockRow]:
-    """Приоритет Google (П1): дубли артикулов из БД отбрасываются."""
+    """Google (П1), если не дороже ERP. Если Google выше — берём ERP."""
     ushk_set = ushk_articles or frozenset()
     cash_set = sam_mb_cash_articles or frozenset()
     by_article: dict[str, StockRow] = {}
@@ -373,8 +373,32 @@ def merge_rows(
             hub=r.hub,
         )
     for row in db_rows:
-        if row.article not in by_article:
+        existing = by_article.get(row.article)
+        if existing is None:
             by_article[row.article] = row
+            continue
+        if row.price < existing.price:
+            ushk = row.ushk_in_stock or existing.ushk_in_stock or row.article in ushk_set
+            by_article[row.article] = StockRow(
+                article=row.article,
+                name=row.name or existing.name,
+                quantity=row.quantity,
+                price=row.price,
+                source=row.source,
+                avito_price=row.avito_price if row.avito_price is not None else existing.avito_price,
+                ushk_in_stock=ushk,
+                sam_mb_cash_price=row.sam_mb_cash_price,
+                kind=row.kind or existing.kind or "tire",
+                brand=row.brand or existing.brand,
+                model=row.model or existing.model,
+                wheel_type=row.wheel_type or existing.wheel_type,
+                width=row.width or existing.width,
+                diameter=row.diameter or existing.diameter,
+                studs=row.studs or existing.studs,
+                circle=row.circle or existing.circle,
+                et=row.et or existing.et,
+                hub=row.hub or existing.hub,
+            )
     return sorted(by_article.values(), key=lambda x: x.article)
 
 

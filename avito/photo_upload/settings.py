@@ -32,6 +32,8 @@ class PhotoUploadRuntime:
     secrets_file: Path
     photos_dir: Path
     stock_file: Path
+    stock_db_path: Path
+    stock_db_schema: Path
     output_dir: Path
     session_secret: str
     stores: tuple[StoreLogin, ...]
@@ -103,6 +105,13 @@ def load_photo_upload_runtime(
     if not stock_file.is_absolute():
         stock_file = root / stock_file
 
+    stock_db_path = app.stock_db.path
+    if not stock_db_path.is_absolute():
+        stock_db_path = root / stock_db_path
+    stock_db_schema = app.stock_db.schema_sql
+    if not stock_db_schema.is_absolute():
+        stock_db_schema = root / stock_db_schema
+
     output_dir = root / "output"
     max_mb = max(1, app.photo_upload.max_upload_mb)
     stores_config = app.stores
@@ -120,6 +129,8 @@ def load_photo_upload_runtime(
         secrets_file=secrets_path,
         photos_dir=photos_dir,
         stock_file=stock_file,
+        stock_db_path=stock_db_path,
+        stock_db_schema=stock_db_schema,
         output_dir=output_dir,
         session_secret=session_secret,
         stores=tuple(stores),

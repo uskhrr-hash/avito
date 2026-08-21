@@ -578,9 +578,11 @@ def _load_avito_sync(raw: dict) -> AvitoSyncSettings:
 
 
 def _load_photo_upload(raw: dict) -> PhotoUploadSettings:
-    mount = str(raw.get("public_mount_path", "/photo")).strip() or "/photo"
+    mount = str(raw.get("public_mount_path", "/")).strip() or "/"
     if not mount.startswith("/"):
         mount = f"/{mount}"
+    # Root "/" is valid (Photo v2 at domain root); do not coerce to /photo.
+    mount_norm = mount.rstrip("/") or "/"
     db_raw = str(raw.get("db_path", "data/photo_upload.db")).strip() or "data/photo_upload.db"
     contrib = str(raw.get("contributors_prefix", "contributors")).strip() or "contributors"
     shops_raw = raw.get("contributor_shops") or []
@@ -590,10 +592,10 @@ def _load_photo_upload(raw: dict) -> PhotoUploadSettings:
     return PhotoUploadSettings(
         enabled=bool(raw.get("enabled", False)),
         host=str(raw.get("host", "127.0.0.1")),
-        port=int(raw.get("port", 8765)),
+        port=int(raw.get("port", 8766)),
         session_max_age_hours=int(raw.get("session_max_age_hours", 72)),
         max_upload_mb=int(raw.get("max_upload_mb", 12)),
-        public_mount_path=mount.rstrip("/") or "/photo",
+        public_mount_path=mount_norm,
         db_path=Path(db_raw),
         contributors_prefix=contrib,
         points_per_photo=max(0, int(raw.get("points_per_photo", 10))),

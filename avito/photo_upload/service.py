@@ -621,6 +621,7 @@ def save_uploaded_photo(
         prefix_in_filename=runtime.prefix_in_filename,
         product_kind=kind,
     )
+    invalidate_photo_index_cache()
     LOG.info("Фото загружено: %s (%s байт)", rel, target.stat().st_size)
     return rel, was_new
 
@@ -702,6 +703,50 @@ def article_from_photo_filename(name: str, store_prefixes: list[str]) -> str | N
     return m.group(1) if m else None
 
 
+# Photo index cache: avoid re-globbing all *.jpg on every admin list request.
+_PHOTO_INDEX_CACHE: dict[str, tuple[tuple, dict[str, dict]]] = {}
+_PHOTO_INDEX_GEN = 0
+
+
+def invalidate_photo_index_cache() -> None:
+    global _PHOTO_INDEX_GEN
+    _PHOTO_INDEX_GEN += 1
+    _PHOTO_INDEX_CACHE.clear()
+
+
+def _photo_search_dirs(
+    runtime: PhotoUploadRuntime, *, folder: str = ""
+) -> list[Path]:
+    root = runtime.photos_dir
+    store_prefixes = [s.prefix for s in runtime.stores]
+    folder_f = folder.strip().lower()
+    if folder_f == runtime.contributors_prefix:
+        return [root / runtime.contributors_prefix]
+    if folder_f and folder_f in store_prefixes:
+        return [root / folder_f]
+    dirs = [root / f for f in store_prefixes]
+    dirs.append(root / runtime.contributors_prefix)
+    return dirs
+
+
+def _photo_index_fingerprint(
+    runtime: PhotoUploadRuntime, *, folder: str = ""
+) -> tuple:
+    """Generation + dir mtimes (parent dir mtime changes on create/delete)."""
+    parts: list[float] = [float(_PHOTO_INDEX_GEN)]
+    root = runtime.photos_dir
+    try:
+        parts.append(root.stat().st_mtime if root.is_dir() else 0.0)
+    except OSError:
+        parts.append(0.0)
+    for d in _photo_search_dirs(runtime, folder=folder):
+        try:
+            parts.append(d.stat().st_mtime if d.is_dir() else 0.0)
+        except OSError:
+            parts.append(0.0)
+    return tuple(parts)
+
+
 def _scan_photo_index(
     runtime: PhotoUploadRuntime, *, folder: str = ""
 ) -> dict[str, dict]:
@@ -710,14 +755,7 @@ def _scan_photo_index(
     if not root.is_dir():
         return {}
     store_prefixes = [s.prefix for s in runtime.stores]
-    folder_f = folder.strip().lower()
-    if folder_f == runtime.contributors_prefix:
-        search_dirs = [root / runtime.contributors_prefix]
-    elif folder_f and folder_f in store_prefixes:
-        search_dirs = [root / folder_f]
-    else:
-        search_dirs = [root / f for f in store_prefixes]
-        search_dirs.append(root / runtime.contributors_prefix)
+    search_dirs = _photo_search_dirs(runtime, folder=folder)
 
     by_article: dict[str, dict] = {}
     for d in search_dirs:
@@ -739,6 +777,19 @@ def _scan_photo_index(
     return by_article
 
 
+def _cached_photo_index(
+    runtime: PhotoUploadRuntime, *, folder: str = ""
+) -> dict[str, dict]:
+    key = f"{runtime.photos_dir.resolve()}|{folder.strip().lower()}"
+    fp = _photo_index_fingerprint(runtime, folder=folder)
+    cached = _PHOTO_INDEX_CACHE.get(key)
+    if cached and cached[0] == fp:
+        return cached[1]
+    index = _scan_photo_index(runtime, folder=folder)
+    _PHOTO_INDEX_CACHE[key] = (fp, index)
+    return index
+
+
 def list_products(
     runtime: PhotoUploadRuntime,
     *,
@@ -746,87 +797,63 @@ def list_products(
     query: str = "",
     only_manual: bool = False,
     has_photos: str = "",
-    limit: int = 300,
+    limit: int = 40,
+    offset: int = 0,
 ) -> tuple[list[dict], int]:
     """
     Товары из остатков (SQLite) + фото/ручные/расчётные цены.
     has_photos: "" | "1" | "0"
     Возвращает (items, total_before_limit).
     """
+    from avito.pricing import recommend_price
     from avito.stock_db import (
-        iter_items,
-        load_manual_prices_map,
-        load_posting_dataframe,
+        load_posting_prices_map,
+        query_admin_products,
         stock_connection,
     )
 
-    photos = _scan_photo_index(runtime, folder=folder)
-    manuals: dict[str, float] = {}
-    posting_price: dict[str, tuple[float | None, str]] = {}
-    stock_rows: list[tuple[str, str, float]] = []
+    photos_filter = str(has_photos or "").strip()
+    # Full jpg scan only when filtering by photos, or to annotate the page.
+    # Cache by photos-dir mtime so default list does not re-glob every request.
+    photos = _cached_photo_index(runtime, folder=folder)
+    photo_articles: frozenset[str] | None = None
+    if photos_filter in ("1", "0"):
+        photo_articles = frozenset(photos.keys())
+
+    limit_n = max(0, min(int(limit or 0), 100))
+    offset_n = max(0, int(offset or 0))
 
     with stock_connection(
         runtime.stock_db_path, schema_path=runtime.stock_db_schema
     ) as conn:
-        manuals = load_manual_prices_map(conn)
-        for item in iter_items(conn):
-            stock_rows.append((item.article, item.name, float(item.price)))
+        rows, total = query_admin_products(
+            conn,
+            query=query,
+            only_manual=bool(only_manual),
+            has_photos=photos_filter,
+            photo_articles=photo_articles,
+            limit=limit_n,
+            offset=offset_n,
+        )
+        arts = [r.article for r in rows]
         try:
-            pdf = load_posting_dataframe(conn)
-        except Exception:
-            pdf = None
-        if pdf is not None and not pdf.empty:
-            for _, row in pdf.iterrows():
-                a = str(row.get("артикул") or "").strip()
-                if a.endswith(".0"):
-                    try:
-                        a = str(int(float(a)))
-                    except (ValueError, TypeError):
-                        pass
-                if not a:
-                    continue
-                try:
-                    price = float(row.get("recommended_price"))
-                except (TypeError, ValueError):
-                    price = None
-                rule = str(row.get("price_rule") or "").strip()
-                posting_price[a] = (price, rule)
+            posting_price = load_posting_prices_map(conn, arts)
+        except Exception as exc:  # noqa: BLE001
+            LOG.warning("posting prices map failed: %s", exc)
+            posting_price = {}
 
-    stock_arts = {a for a, _, _ in stock_rows}
-    for art, price in manuals.items():
-        if art not in stock_arts:
-            stock_rows.append((art, "", 0.0))
-
-    q = query.strip().lower()
-    photos_filter = str(has_photos or "").strip()
     matched: list[dict] = []
-    for art, name, incoming in sorted(stock_rows, key=lambda x: x[0]):
+    for row in rows:
+        art = row.article
+        name = row.name
+        incoming = float(row.price or 0)
+        manual = row.manual_price
         photo = photos.get(art) or {}
         photo_count = int(photo.get("photo_count") or 0)
-        manual = manuals.get(art)
         calc, rule = posting_price.get(art, (None, ""))
         if calc is None and incoming > 0 and manual is None:
-            from datetime import date
-
-            from avito.pricing import recommend_price
-
-            calc = float(
-                recommend_price(
-                    incoming,
-                    None,
-                    seed=art,
-                    date_key=date.today().isoformat(),
-                ).recommended_price
-            )
+            calc = float(recommend_price(incoming).recommended_price)
             rule = "markup_x1.15"
-        if only_manual and manual is None:
-            continue
-        if photos_filter == "1" and photo_count <= 0:
-            continue
-        if photos_filter == "0" and photo_count > 0:
-            continue
-        if q and q not in art.lower() and q not in (name or "").lower():
-            continue
         matched.append(
             {
                 "article": art,
@@ -834,19 +861,11 @@ def list_products(
                 "incoming": incoming or None,
                 "photo_count": photo_count,
                 "folders": sorted(photo.get("folders") or []),
-                "mtime": int(photo.get("mtime") or 0),
                 "manual_price": manual,
                 "calculated_price": calc,
                 "price_rule": "manual" if manual is not None else rule,
-                "effective_price": manual if manual is not None else calc,
-                "has_photos": photo_count > 0,
             }
         )
-
-    total = len(matched)
-    limit_n = max(0, int(limit)) if limit is not None else 0
-    if limit_n > 0:
-        matched = matched[:limit_n]
     return matched, total
 
 
@@ -855,15 +874,19 @@ def list_photo_files(
     *,
     folder: str = "",
     article: str = "",
-    limit: int = 80,
-) -> list[dict]:
-    """Список файлов в photos_dir для админки."""
+    limit: int = 40,
+    offset: int = 0,
+) -> tuple[list[dict], bool]:
+    """Список файлов в photos_dir для админки. Возвращает (items, has_more)."""
     root = runtime.photos_dir
     if not root.is_dir():
-        return []
+        return [], False
     folders = [runtime.contributors_prefix] + [s.prefix for s in runtime.stores]
     folder = folder.strip().lower()
     art = article.strip()
+    limit_n = max(0, min(int(limit or 0), 100))
+    offset_n = max(0, int(offset or 0))
+    need = offset_n + limit_n + 1  # +1 to detect has_more
     out: list[dict] = []
     search_dirs: list[Path]
     if folder and folder in folders:
@@ -885,12 +908,14 @@ def list_photo_files(
                     "folder": path.parent.name,
                     "filename": name,
                     "size": st.st_size,
-                    "mtime": int(st.st_mtime),
                 }
             )
-            if len(out) >= limit:
-                return out
-    return out
+            if len(out) >= need:
+                page = out[offset_n : offset_n + limit_n]
+                return page, True
+    page = out[offset_n : offset_n + limit_n]
+    has_more = len(out) > offset_n + limit_n
+    return page, has_more
 
 
 def delete_photo_file(runtime: PhotoUploadRuntime, relative_path: str) -> str:
@@ -904,4 +929,5 @@ def delete_photo_file(runtime: PhotoUploadRuntime, relative_path: str) -> str:
     if not target.is_file():
         raise ValueError("Файл не найден")
     target.unlink()
+    invalidate_photo_index_cache()
     return rel.as_posix()

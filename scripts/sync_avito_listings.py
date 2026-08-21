@@ -74,11 +74,28 @@ def main() -> int:
         ids_from_csv=ids_from_csv,
     )
 
+    manuals: dict[str, float] = {}
+    try:
+        from avito.stock_db import load_manual_prices_map, stock_connection
+
+        db_path = app.stock_db.path
+        if not db_path.is_absolute():
+            db_path = ROOT / db_path
+        schema = app.stock_db.schema_sql
+        if not schema.is_absolute():
+            schema = ROOT / schema
+        if db_path.is_file():
+            with stock_connection(db_path, schema_path=schema) as conn:
+                manuals = load_manual_prices_map(conn)
+    except Exception as exc:  # noqa: BLE001
+        LOG.warning("manual_prices: %s", exc)
+
     items = build_sync_items(
         posting_df,
         app.stores,
         avito_ids,
         max_listing_quantity=app.autoload.max_listing_quantity,
+        manual_prices=manuals,
     )
     LOG.info("Posting: %s | к обновлению через API: %s", posting_path.name, len(items))
     if not items:

@@ -41,7 +41,7 @@ where b.parent_id = 2
 REGISTER_ARTICLES_AT_SUPPLIER_SQL = REGISTER_ARTICLES_TIRES_SQL
 
 _CACHE: dict[tuple[str, int, str], tuple[float, frozenset[str]]] = {}
-# Склад УШК ночью почти не меняется; длинный TTL снижает живые hit'ы в ERP с /photo/.
+# Склад УШК ночью почти не меняется; длинный TTL снижает живые hit'ы в ERP с photo UI.
 _CACHE_TTL_SEC = 3600.0
 
 

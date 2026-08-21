@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Остатки → posting_YYYY-MM-DD.xlsx (цены из Google/БД, без парсера Avito)."""
+"""Остатки → SQLite posting_items (цена: входящая × multiplier)."""
 from __future__ import annotations
 
 import argparse
@@ -20,6 +20,7 @@ from avito.compare import (
     stock_only_overview_rows,
 )
 from avito.config import load_config
+from avito.stock_db import load_manual_prices_map, replace_posting, stock_connection
 from avito.stock_sources import load_secrets, refresh_goods_file
 
 ROOT = Path(__file__).resolve().parent
@@ -27,7 +28,7 @@ LOG = logging.getLogger("compare_prices")
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Цены для выкладки из остатков")
+    p = argparse.ArgumentParser(description="Цены для выкладки из остатков → SQLite")
     p.add_argument("-c", "--config", type=Path, default=ROOT / "config.yaml")
     p.add_argument(
         "--avito-csv",
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--date",
         default=None,
-        help="Дата в имени файла YYYY-MM-DD (по умолчанию сегодня)",
+        help="Дата снимка YYYY-MM-DD (по умолчанию сегодня)",
     )
     return p.parse_args()
 
@@ -68,21 +69,6 @@ def find_latest_avito_csv(output_dir: Path) -> Path | None:
     return files[-1] if files else None
 
 
-def write_posting_xlsx(
-    path: Path,
-    posting: list[dict],
-    problems: list[dict],
-    own_rows: list[dict],
-    match_rows: list[dict],
-) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with pd.ExcelWriter(path, engine="openpyxl") as writer:
-        pd.DataFrame(posting).to_excel(writer, sheet_name="к выкладке", index=False)
-        pd.DataFrame(match_rows).to_excel(writer, sheet_name="сопоставление", index=False)
-        pd.DataFrame(problems).to_excel(writer, sheet_name="проблемы", index=False)
-        pd.DataFrame(own_rows).to_excel(writer, sheet_name="свои на avito", index=False)
-
-
 def main() -> int:
     args = parse_args()
     logging.basicConfig(
@@ -94,9 +80,8 @@ def main() -> int:
     cmp_cfg = cfg.compare
     stamp = args.date or date.today().isoformat()
 
-    stock_path = ROOT / cmp_cfg.stock_file
-    if not stock_path.is_absolute():
-        stock_path = ROOT / stock_path
+    stock_db_path = cfg.stock_db.path
+    stock_db_schema = cfg.stock_db.schema_sql
 
     stock_cfg = cfg.stock_sources
     if stock_cfg.enabled and not args.skip_stock_refresh:
@@ -107,21 +92,33 @@ def main() -> int:
         )
         try:
             secrets = load_secrets(sec_path)
-            stock_path, merged = refresh_goods_file(stock_cfg, root=ROOT, secrets=secrets)
+            stock_db_path, merged = refresh_goods_file(
+                stock_cfg,
+                root=ROOT,
+                secrets=secrets,
+                wheels=cfg.wheels,
+                stock_db_path=stock_db_path,
+                stock_db_schema=stock_db_schema,
+            )
             LOG.info(
-                "Остатки обновлены из Google/БД: %s позиций → %s",
+                "Остатки обновлены из Google/БД: %s позиций → sqlite %s",
                 len(merged),
-                stock_path,
+                stock_db_path,
             )
         except Exception as exc:  # noqa: BLE001
             LOG.error("Не удалось обновить остатки: %s", exc)
             return 2
-    elif not stock_path.is_file():
-        LOG.error("Нет %s — запустите: python build_stock.py", stock_path)
+    elif not stock_db_path.is_file():
+        LOG.error("Нет %s — запустите: python build_stock.py", stock_db_path)
         return 1
 
     try:
-        stock = load_stock(stock_path, cmp_cfg)
+        stock = load_stock(
+            Path(),
+            cmp_cfg,
+            stock_db_path=stock_db_path if stock_db_path.is_file() else None,
+            stock_db_schema=stock_db_schema,
+        )
     except (FileNotFoundError, ValueError) as exc:
         LOG.error("%s", exc)
         return 1
@@ -133,11 +130,20 @@ def main() -> int:
         LOG.error("В остатках нет строк с номенклатурой и ценой")
         return 1
 
+    manuals: dict[str, float] = {}
+    if stock_db_path.is_file():
+        with stock_connection(stock_db_path, schema_path=stock_db_schema) as conn:
+            manuals = load_manual_prices_map(conn)
+        if manuals:
+            LOG.info("Ручных цен из админки: %s", len(manuals))
+
     if cmp_cfg.stock_only:
         avito_mins: dict[str, float] = {}
         match_rows = stock_only_overview_rows(stock)
         own_rows: list[dict] = []
-        posting, problems, _ = build_posting_rows(stock, avito_mins, cmp_cfg, stamp)
+        posting, problems, _ = build_posting_rows(
+            stock, avito_mins, cmp_cfg, stamp, manual_prices=manuals
+        )
         LOG.info(
             "Режим stock_only: базовая цена × %.2f",
             cmp_cfg.no_avito_multiplier,
@@ -164,7 +170,9 @@ def main() -> int:
             avito_mins,
             exclude_needs_review=cmp_cfg.exclude_needs_review,
         )
-        posting, problems, _ = build_posting_rows(stock, avito_mins, cmp_cfg, stamp)
+        posting, problems, _ = build_posting_rows(
+            stock, avito_mins, cmp_cfg, stamp, manual_prices=manuals
+        )
         seen = {(p["номенклатура"], p["проблема"]) for p in problems}
         for p in match_problems:
             key = (p["номенклатура"], p["проблема"])
@@ -174,13 +182,18 @@ def main() -> int:
         own_rows = own_listings_report(avito_df)
         LOG.info("Avito дамп: %s (%s строк)", avito_path.name, len(avito_df))
 
-    out_path = args.output_dir / f"posting_{stamp}.xlsx"
-    write_posting_xlsx(out_path, posting, problems, own_rows, match_rows)
+    with stock_connection(stock_db_path, schema_path=stock_db_schema) as conn:
+        n = replace_posting(
+            conn,
+            posting,
+            problems=problems,
+            own_rows=own_rows,
+            match_rows=match_rows,
+            built_at=f"{stamp}T00:00:00Z",
+        )
 
-    calc = len(posting)
-    LOG.info("Остатки: %s (%s позиций)", stock_path.name, len(stock))
-    LOG.info("К выкладке: %s (база × %.2f)", len(posting), cmp_cfg.no_avito_multiplier)
-    LOG.info("→ %s", out_path)
+    LOG.info("Остатки: %s позиций", len(stock))
+    LOG.info("К выкладке: %s → sqlite posting_items", n)
     return 0
 
 

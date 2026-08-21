@@ -796,70 +796,34 @@ def load_posting_dataframe(conn: sqlite3.Connection):
     import pandas as pd
 
     has_kind = "kind" in _table_columns(conn, "posting_items")
-    stock_cols = set(_table_columns(conn, "stock_items") or [])
-    wheel_join = "brand" in stock_cols and "wheel_type" in stock_cols
-    kind_sql = ", p.kind" if has_kind else ""
-    if wheel_join:
-        sql = f"""
-        SELECT p.article, p.nomenclature, p.quantity, p.incoming, p.on_avito,
-               p.ushk_in_stock, p.sam_mb_cash_price, p.avito_min, p.avito_price_fixed,
-               p.recommended_price, p.price_rule, p.discount_pct, p.floor_price,
-               p.duplicate{kind_sql},
-               COALESCE(s.brand, '') AS brand,
-               COALESCE(s.model, '') AS model,
-               COALESCE(s.wheel_type, '') AS wheel_type,
-               COALESCE(s.width, '') AS width,
-               COALESCE(s.diameter, '') AS diameter,
-               COALESCE(s.studs, '') AS studs,
-               COALESCE(s.circle, '') AS circle,
-               COALESCE(s.et, '') AS et,
-               COALESCE(s.hub, '') AS hub
-        FROM posting_items p
-        LEFT JOIN stock_items s ON s.article = p.article
-        ORDER BY p.article
-        """
-    else:
-        kind_sql_plain = ", kind" if has_kind else ""
-        sql = f"""
+    kind_sql = ", kind" if has_kind else ""
+    rows = conn.execute(
+        f"""
         SELECT article, nomenclature, quantity, incoming, on_avito, ushk_in_stock,
                sam_mb_cash_price, avito_min, avito_price_fixed, recommended_price,
-               price_rule, discount_pct, floor_price, duplicate{kind_sql_plain}
+               price_rule, discount_pct, floor_price, duplicate{kind_sql}
         FROM posting_items
         ORDER BY article
         """
-    rows = conn.execute(sql).fetchall()
+    ).fetchall()
     records = []
     for r in rows:
-        keys = set(r.keys())
-        rec = {
-            "артикул": r["article"],
-            "номенклатура": r["nomenclature"],
-            "количество": r["quantity"],
-            "входящая": r["incoming"],
-            "ушк_в_наличии": bool(r["ushk_in_stock"]),
-            "цена_за_наличный_расчет": bool(r["sam_mb_cash_price"]),
-            "recommended_price": r["recommended_price"],
-            "price_rule": r["price_rule"],
-            "discount_pct": r["discount_pct"] if r["discount_pct"] is not None else "",
-            "floor_входящая_x1.1": r["floor_price"] if r["floor_price"] is not None else "",
-            "дубликат_остаток": bool(r["duplicate"]),
-            "kind": _normalize_kind(r["kind"]) if has_kind and "kind" in keys else "tire",
-        }
-        if wheel_join:
-            rec.update(
-                {
-                    "brand": str(r["brand"] or "").strip(),
-                    "model": str(r["model"] or "").strip(),
-                    "wheel_type": str(r["wheel_type"] or "").strip(),
-                    "width": str(r["width"] or "").strip(),
-                    "diameter": str(r["diameter"] or "").strip(),
-                    "studs": str(r["studs"] or "").strip(),
-                    "circle": str(r["circle"] or "").strip(),
-                    "et": str(r["et"] or "").strip(),
-                    "hub": str(r["hub"] or "").strip(),
-                }
-            )
-        records.append(rec)
+        records.append(
+            {
+                "артикул": r["article"],
+                "номенклатура": r["nomenclature"],
+                "количество": r["quantity"],
+                "входящая": r["incoming"],
+                "ушк_в_наличии": bool(r["ushk_in_stock"]),
+                "цена_за_наличный_расчет": bool(r["sam_mb_cash_price"]),
+                "recommended_price": r["recommended_price"],
+                "price_rule": r["price_rule"],
+                "discount_pct": r["discount_pct"] if r["discount_pct"] is not None else "",
+                "floor_входящая_x1.1": r["floor_price"] if r["floor_price"] is not None else "",
+                "дубликат_остаток": bool(r["duplicate"]),
+                "kind": _normalize_kind(r["kind"]) if has_kind else "tire",
+            }
+        )
     return pd.DataFrame(records)
 
 

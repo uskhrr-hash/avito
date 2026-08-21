@@ -11,12 +11,17 @@ echo "=== Python зависимости ==="
 source .venv/bin/activate
 pip install -r requirements.txt -q
 
-echo "=== Перезапуск веб-загрузки фото ==="
-if systemctl is-enabled avito-photo-upload >/dev/null 2>&1; then
-  systemctl restart avito-photo-upload
-  systemctl status avito-photo-upload --no-pager
+echo "=== Перезапуск Photo v2 ==="
+if systemctl is-enabled avito-photo-v2 >/dev/null 2>&1; then
+  systemctl restart avito-photo-v2
+  systemctl status avito-photo-v2 --no-pager
 else
-  echo "Сервис avito-photo-upload не установлен — пропуск"
+  echo "Сервис avito-photo-v2 не установлен — пропуск"
+fi
+
+# Legacy v1 must stay dead if somehow re-enabled
+if systemctl list-unit-files avito-photo-upload.service >/dev/null 2>&1; then
+  systemctl disable --now avito-photo-upload 2>/dev/null || true
 fi
 
 echo "=== systemd: ежедневный пайплайн (таймер) ==="

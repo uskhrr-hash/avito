@@ -259,11 +259,18 @@ def _run_api_sync(app, config_path: Path, *, dry_run: bool) -> int:
         schema = app.stock_db.schema_sql
         if not schema.is_absolute():
             schema = config_path.parent / schema
+    manuals: dict[str, float] = {}
     try:
-        from avito.stock_db import load_avito_ids_map, load_listings, stock_connection
+        from avito.stock_db import (
+            load_avito_ids_map,
+            load_listings,
+            load_manual_prices_map,
+            stock_connection,
+        )
 
         with stock_connection(db_path, schema_path=schema) as conn:
             ids_from_csv = {**ids_from_csv, **load_avito_ids_map(conn)}
+            manuals = load_manual_prices_map(conn)
             for row in load_listings(conn):
                 if row.avito_id:
                     ids_from_csv[row.listing_id] = row.avito_id
@@ -281,6 +288,7 @@ def _run_api_sync(app, config_path: Path, *, dry_run: bool) -> int:
         app.stores,
         avito_ids,
         max_listing_quantity=app.autoload.max_listing_quantity,
+        manual_prices=manuals,
     )
     if skip_ids:
         before = len(items)
